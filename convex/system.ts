@@ -23,6 +23,18 @@ export const getConversationById = query({
   },
 });
 
+export const getProjectById = query({
+  args: {
+    projectId: v.id("projects"),
+    internalKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    return await ctx.db.get(args.projectId);
+  },
+});
+
 export const createMessage = mutation({
   args: {
     internalKey: v.string(),
