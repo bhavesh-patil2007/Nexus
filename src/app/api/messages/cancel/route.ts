@@ -31,6 +31,25 @@ export async function POST(request: Request) {
     );
   }
 
+  const project = await convex.query(api.system.getProjectById, {
+    internalKey,
+    projectId: projectId as Id<"projects">,
+  });
+
+  if (!project) {
+    return NextResponse.json(
+      { error: "Project not found" },
+      { status: 404 }
+    );
+  }
+
+  if (project.ownerId !== userId) {
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 403 }
+    );
+  }
+
   const processingMessages = await convex.query(
     api.system.getProcessingMessages,
     {
