@@ -25,10 +25,16 @@ const Tab = ({
     setActiveTab,
     openFile,
     closeTab,
+    isFileDirty,
+    getTabData,
   } = useEditor(projectId);
 
   const isActive = activeTabId === fileId;
   const isPreview = previewTabId === fileId;
+  const isDirty = isFileDirty(fileId);
+  const tabData = getTabData(fileId);
+  const hasConflict = tabData?.hasConflict ?? false;
+  const isSaving = tabData?.isSaving ?? false;
   const fileName = file?.name ?? "Loading...";
 
   return (
@@ -53,6 +59,23 @@ const Tab = ({
       )}>
         {fileName}
       </span>
+      {/* Dirty / Conflict / Saving indicator */}
+      {hasConflict ? (
+        <span
+          className="size-2 rounded-full bg-red-500 shrink-0"
+          title="External update conflict"
+        />
+      ) : isSaving ? (
+        <span
+          className="size-2 rounded-full bg-blue-500 animate-pulse shrink-0"
+          title="Saving..."
+        />
+      ) : isDirty ? (
+        <span
+          className="size-2 rounded-full bg-amber-500 shrink-0"
+          title="Unsaved changes"
+        />
+      ) : null}
       <button
         onClick={(e) => {
           e.preventDefault();
