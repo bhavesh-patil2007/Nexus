@@ -130,9 +130,36 @@ export const Navbar = ({
         {project?.importStatus === "importing" ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <LoaderIcon className="size-4 text-muted-foreground animate-spin" />
+              <div className="flex items-center gap-1.5 cursor-default">
+                <LoaderIcon className="size-4 text-muted-foreground animate-spin" />
+                {project.importProgress && project.importProgress.totalFiles > 0 ? (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {project.importProgress.processedFiles} / {project.importProgress.totalFiles} (
+                    {Math.min(
+                      100,
+                      Math.round(
+                        (project.importProgress.processedFiles /
+                          project.importProgress.totalFiles) *
+                          100,
+                      ),
+                    )}
+                    %)
+                  </span>
+                ) : null}
+              </div>
             </TooltipTrigger>
-            <TooltipContent>Importing...</TooltipContent>
+            <TooltipContent>
+              {project.importProgress && project.importProgress.totalFiles > 0
+                ? `Importing repository: ${project.importProgress.processedFiles} / ${project.importProgress.totalFiles} files (${Math.min(
+                    100,
+                    Math.round(
+                      (project.importProgress.processedFiles /
+                        project.importProgress.totalFiles) *
+                        100,
+                    ),
+                  )}%)`
+                : "Importing repository..."}
+            </TooltipContent>
           </Tooltip>
         ) : (
           <Tooltip>

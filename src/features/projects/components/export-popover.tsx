@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Popover,
   PopoverContent,
@@ -116,12 +117,26 @@ export const ExportPopover = ({ projectId }: ExportPopoverProps) => {
 
   const renderContent = () => {
     if (exportStatus === "exporting") {
+      const progress = project?.exportProgress;
+      const total = progress?.totalFiles ?? 0;
+      const processed = progress?.processedFiles ?? 0;
+      const percent =
+        total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+
       return (
-        <div className="flex flex-col items-center gap-3">
+        <div className="flex flex-col items-center gap-3 w-full">
           <LoaderIcon className="size-6 animate-spin text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
-            Exporting to GitHub...
-          </p>
+          <div className="flex flex-col items-center gap-1 w-full text-center">
+            <p className="text-sm font-medium">Exporting to GitHub...</p>
+            {total > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {processed} / {total} files ({percent}%)
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Preparing files...</p>
+            )}
+          </div>
+          {total > 0 && <Progress value={percent} className="w-full h-1.5" />}
           <Button
             size="sm"
             variant="outline"
