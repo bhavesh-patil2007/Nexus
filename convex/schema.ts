@@ -26,6 +26,7 @@ export default defineSchema({
       v.object({
         installCommand: v.optional(v.string()),
         devCommand: v.optional(v.string()),
+        envVariables: v.optional(v.record(v.string(), v.string())),
       }),
     ),
   }).index("by_owner", ["ownerId"]),

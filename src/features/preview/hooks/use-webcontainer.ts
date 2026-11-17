@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { WebContainer } from "@webcontainer/api";
+import { WebContainer, WebContainerProcess } from "@webcontainer/api";
 
 import { buildFileTree, getFilePath } from "@/features/preview/utils/file-tree";
 import { useFiles } from "@/features/projects/hooks/use-files";
 
-import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
 
 // Singleton WebContainer instance
@@ -22,7 +21,11 @@ const getWebContainer = async (): Promise<WebContainer> => {
 
 const teardownWebContainer = () => {
   if (webcontainerInstance) {
-    webcontainerInstance.teardown();
+    try {
+      webcontainerInstance.teardown();
+    } catch {
+      // Ignore teardown error if already torn down
+    }
     webcontainerInstance = null;
   }
   bootPromise = null;
@@ -34,6 +37,7 @@ interface UseWebContainerProps {
   settings?: {
     installCommand?: string;
     devCommand?: string;
+    envVariables?: Record<string, string>;
   };
 }
 
@@ -53,8 +57,50 @@ export const useWebContainer = ({
   const containerRef = useRef<WebContainer | null>(null);
   const hasStartedRef = useRef(false);
 
+  // References to active processes and streams
+  const shellProcessRef = useRef<WebContainerProcess | null>(null);
+  const shellInputWriterRef = useRef<WritableStreamDefaultWriter<string> | null>(null);
+  const devProcessRef = useRef<WebContainerProcess | null>(null);
+  const installProcessRef = useRef<WebContainerProcess | null>(null);
+
+  // Terminal dimensions tracking
+  const terminalDimensionsRef = useRef<{ cols: number; rows: number }>({
+    cols: 80,
+    rows: 24,
+  });
+
   // Fetch files from Convex (auto-updates on changes)
   const files = useFiles(projectId);
+
+  // Append data safely to terminal output
+  const appendOutput = useCallback((data: string) => {
+    setTerminalOutput((prev) => prev + data);
+  }, []);
+
+  // Send input data from xterm directly to interactive shell input stream
+  const sendTerminalInput = useCallback((data: string) => {
+    if (shellInputWriterRef.current) {
+      shellInputWriterRef.current.write(data).catch(() => {
+        // Handle writer closure or failure
+      });
+    }
+  }, []);
+
+  // Resize active shell process when terminal dimensions change
+  const resizeTerminal = useCallback((dimensions: { cols: number; rows: number }) => {
+    if (dimensions.cols <= 0 || dimensions.rows <= 0) return;
+    terminalDimensionsRef.current = dimensions;
+    try {
+      shellProcessRef.current?.resize(dimensions);
+    } catch {
+      // Ignore resize errors if process already exited
+    }
+  }, []);
+
+  // Kill/Interrupt running foreground process or reset shell
+  const interruptForegroundProcess = useCallback(() => {
+    sendTerminalInput("\x03");
+  }, [sendTerminalInput]);
 
   // Initial boot and mount
   useEffect(() => {
@@ -63,6 +109,7 @@ export const useWebContainer = ({
     }
 
     hasStartedRef.current = true;
+    let isMounted = true;
 
     const start = async () => {
       try {
@@ -70,65 +117,155 @@ export const useWebContainer = ({
         setError(null);
         setTerminalOutput("");
 
-        const appendOutput = (data: string) => {
-          setTerminalOutput((prev) => prev + data);
-        };
-
         const container = await getWebContainer();
+        if (!isMounted) return;
         containerRef.current = container;
 
         const fileTree = buildFileTree(files);
         await container.mount(fileTree);
+        if (!isMounted) return;
 
-        container.on("server-ready", (_port, url) => {
+        const unsubscribeServerReady = container.on("server-ready", (_port, url) => {
+          if (!isMounted) return;
           setPreviewUrl(url);
           setStatus("running");
         });
 
+        // 1. Run installation process
         setStatus("installing");
 
-        // Parse install command (default: npm install)
-        const installCmd = settings?.installCommand || "npm install";
-        const [installBin, ...installArgs] = installCmd.split(" ");
+        const installCmd = settings?.installCommand?.trim() || "npm install";
+        const [installBin, ...installArgs] = installCmd.split(/\s+/).filter(Boolean);
         appendOutput(`$ ${installCmd}\n`);
-        const installProcess = await container.spawn(installBin, installArgs);
+
+        const installProcess = await container.spawn(installBin, installArgs, {
+          env: settings?.envVariables,
+          terminal: terminalDimensionsRef.current,
+        });
+        if (!isMounted) {
+          installProcess.kill();
+          unsubscribeServerReady();
+          return;
+        }
+        installProcessRef.current = installProcess;
+
         installProcess.output.pipeTo(
           new WritableStream({
             write(data) {
-              appendOutput(data);
+              if (isMounted) appendOutput(data);
             },
           }),
-        );
+        ).catch(() => {});
+
         const installExitCode = await installProcess.exit;
+        installProcessRef.current = null;
+        if (!isMounted) {
+          unsubscribeServerReady();
+          return;
+        }
 
-        if (installExitCode !== 0)
+        if (installExitCode !== 0) {
           throw new Error(`${installCmd} failed with code ${installExitCode}`);
+        }
 
-        // Parse dev command (default: npm run dev)
-        const devCmd = settings?.devCommand || "npm run dev";
-        const [devBin, ...devArgs] = devCmd.split(" ");
+        // 2. Start development server process
+        const devCmd = settings?.devCommand?.trim() || "npm run dev";
+        const [devBin, ...devArgs] = devCmd.split(/\s+/).filter(Boolean);
         appendOutput(`\n$ ${devCmd}\n`);
-        const devProcess = await container.spawn(devBin, devArgs);
+
+        const devProcess = await container.spawn(devBin, devArgs, {
+          env: settings?.envVariables,
+          terminal: terminalDimensionsRef.current,
+        });
+        if (!isMounted) {
+          devProcess.kill();
+          unsubscribeServerReady();
+          return;
+        }
+        devProcessRef.current = devProcess;
+
         devProcess.output.pipeTo(
           new WritableStream({
             write(data) {
-              appendOutput(data);
+              if (isMounted) appendOutput(data);
             },
           }),
-        );
-      } catch (error) {
-        setError(error instanceof Error ? error.message : "Unknown error");
+        ).catch(() => {});
+
+        devProcess.exit.then((exitCode) => {
+          devProcessRef.current = null;
+          if (isMounted && exitCode !== 0) {
+            appendOutput(`\nDev server exited with code ${exitCode}\n`);
+          }
+        }).catch(() => {});
+
+        // 3. Spawn persistent interactive jsh shell
+        appendOutput(`\nStarting interactive shell...\n`);
+        const shellProcess = await container.spawn("jsh", {
+          env: settings?.envVariables,
+          terminal: terminalDimensionsRef.current,
+        });
+        if (!isMounted) {
+          shellProcess.kill();
+          return;
+        }
+        shellProcessRef.current = shellProcess;
+        shellInputWriterRef.current = shellProcess.input.getWriter();
+
+        shellProcess.output.pipeTo(
+          new WritableStream({
+            write(data) {
+              if (isMounted) appendOutput(data);
+            },
+          }),
+        ).catch(() => {});
+
+        shellProcess.exit.then((code) => {
+          if (shellProcessRef.current === shellProcess) {
+            shellProcessRef.current = null;
+            shellInputWriterRef.current = null;
+          }
+          if (isMounted) {
+            appendOutput(`\n[Process completed - exit code ${code}]\n`);
+          }
+        }).catch(() => {});
+
+      } catch (err) {
+        if (!isMounted) return;
+        setError(err instanceof Error ? err.message : "Unknown error");
         setStatus("error");
       }
     };
 
     start();
+
+    return () => {
+      isMounted = false;
+      if (shellInputWriterRef.current) {
+        shellInputWriterRef.current.releaseLock();
+        shellInputWriterRef.current = null;
+      }
+      if (shellProcessRef.current) {
+        shellProcessRef.current.kill();
+        shellProcessRef.current = null;
+      }
+      if (devProcessRef.current) {
+        devProcessRef.current.kill();
+        devProcessRef.current = null;
+      }
+      if (installProcessRef.current) {
+        installProcessRef.current.kill();
+        installProcessRef.current = null;
+      }
+    };
   }, [
     enabled,
     files,
     restartKey,
     settings?.devCommand,
     settings?.installCommand,
+    settings?.envVariables,
+    appendOutput,
   ]);
 
   // Sync file changes (hot-reload)
@@ -149,6 +286,22 @@ export const useWebContainer = ({
   // Reset when disabled
   useEffect(() => {
     if (!enabled) {
+      if (shellInputWriterRef.current) {
+        shellInputWriterRef.current.releaseLock();
+        shellInputWriterRef.current = null;
+      }
+      if (shellProcessRef.current) {
+        shellProcessRef.current.kill();
+        shellProcessRef.current = null;
+      }
+      if (devProcessRef.current) {
+        devProcessRef.current.kill();
+        devProcessRef.current = null;
+      }
+      if (installProcessRef.current) {
+        installProcessRef.current.kill();
+        installProcessRef.current = null;
+      }
       hasStartedRef.current = false;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("idle");
@@ -159,6 +312,23 @@ export const useWebContainer = ({
 
   // Restart the entire WebContainer process
   const restart = useCallback(() => {
+    if (shellInputWriterRef.current) {
+      shellInputWriterRef.current.releaseLock();
+      shellInputWriterRef.current = null;
+    }
+    if (shellProcessRef.current) {
+      shellProcessRef.current.kill();
+      shellProcessRef.current = null;
+    }
+    if (devProcessRef.current) {
+      devProcessRef.current.kill();
+      devProcessRef.current = null;
+    }
+    if (installProcessRef.current) {
+      installProcessRef.current.kill();
+      installProcessRef.current = null;
+    }
+
     teardownWebContainer();
     containerRef.current = null;
     hasStartedRef.current = false;
@@ -174,5 +344,8 @@ export const useWebContainer = ({
     error,
     restart,
     terminalOutput,
+    sendTerminalInput,
+    resizeTerminal,
+    interruptForegroundProcess,
   };
 };
