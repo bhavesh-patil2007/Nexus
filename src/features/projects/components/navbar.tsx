@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { CloudCheckIcon, LoaderIcon } from "lucide-react";
+import { CloudCheckIcon, LoaderIcon, SettingsIcon } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { Poppins } from "next/font/google";
 import { formatDistanceToNow } from "date-fns";
@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 
 import { Id } from "../../../../convex/_generated/dataModel";
 import { useProject, useRenameProject } from "../hooks/use-projects";
+import { ProjectSettingsDialog } from "./project-settings-dialog";
 
 const font = Poppins({
   subsets: ["latin"],
@@ -42,6 +43,7 @@ export const Navbar = ({
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [name, setName] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleStartRename = () => {
     if (!project) return;
@@ -150,8 +152,22 @@ export const Navbar = ({
         )}
       </div>
       <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 text-muted-foreground hover:text-foreground"
+          title="Project settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <SettingsIcon className="size-4" />
+        </Button>
         <UserButton />
       </div>
+      <ProjectSettingsDialog
+        projectId={projectId}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
     </nav>
   )
 };
