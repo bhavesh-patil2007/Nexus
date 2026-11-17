@@ -516,6 +516,53 @@ export const updateImportStatus = mutation({
   },
 });
 
+export const updateImportProgress = mutation({
+  args: {
+    internalKey: v.string(),
+    projectId: v.id("projects"),
+    progress: v.object({
+      status: v.union(
+        v.literal("pending"),
+        v.literal("running"),
+        v.literal("completed"),
+        v.literal("failed"),
+      ),
+      totalFiles: v.number(),
+      processedFiles: v.number(),
+      successfulFiles: v.number(),
+      failedFiles: v.number(),
+      skippedFiles: v.number(),
+      currentBatch: v.number(),
+      totalBatches: v.number(),
+      errorMessage: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const project = await ctx.db.get("projects", args.projectId);
+    if (!project) return;
+
+    // Prevent backwards progression if an older retry attempts to overwrite forward progress
+    if (
+      project.importProgress &&
+      project.importProgress.processedFiles > args.progress.processedFiles &&
+      args.progress.status === "running"
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    await ctx.db.patch("projects", args.projectId, {
+      importProgress: {
+        ...args.progress,
+        updatedAt: now,
+      },
+      updatedAt: now,
+    });
+  },
+});
+
 export const updateExportStatus = mutation({
   args: {
     internalKey: v.string(),
@@ -537,6 +584,54 @@ export const updateExportStatus = mutation({
       exportStatus: args.status,
       exportRepoUrl: args.repoUrl,
       updatedAt: Date.now(),
+    });
+  },
+});
+
+export const updateExportProgress = mutation({
+  args: {
+    internalKey: v.string(),
+    projectId: v.id("projects"),
+    progress: v.object({
+      status: v.union(
+        v.literal("pending"),
+        v.literal("running"),
+        v.literal("completed"),
+        v.literal("failed"),
+        v.literal("cancelled"),
+      ),
+      totalFiles: v.number(),
+      processedFiles: v.number(),
+      successfulFiles: v.number(),
+      failedFiles: v.number(),
+      skippedFiles: v.number(),
+      currentBatch: v.number(),
+      totalBatches: v.number(),
+      errorMessage: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const project = await ctx.db.get("projects", args.projectId);
+    if (!project) return;
+
+    // Prevent backwards progression if an older retry attempts to overwrite forward progress
+    if (
+      project.exportProgress &&
+      project.exportProgress.processedFiles > args.progress.processedFiles &&
+      args.progress.status === "running"
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    await ctx.db.patch("projects", args.projectId, {
+      exportProgress: {
+        ...args.progress,
+        updatedAt: now,
+      },
+      updatedAt: now,
     });
   },
 });
