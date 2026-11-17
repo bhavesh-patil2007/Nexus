@@ -8,6 +8,7 @@ export const updateSettings = mutation({
     settings: v.object({
       installCommand: v.optional(v.string()),
       devCommand: v.optional(v.string()),
+      envVariables: v.optional(v.record(v.string(), v.string())),
     }),
   },
   handler: async (ctx, args) => {
