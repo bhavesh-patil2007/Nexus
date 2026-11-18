@@ -8,7 +8,7 @@ import { convex } from "@/lib/convex-client";
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
 
-const requestSchema = z.object({
+export const requestSchema = z.object({
   projectId: z.string(),
 });
 
