@@ -23,6 +23,18 @@ export const getConversationById = query({
   },
 });
 
+export const getProjectById = query({
+  args: {
+    projectId: v.id("projects"),
+    internalKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    return await ctx.db.get(args.projectId);
+  },
+});
+
 export const createMessage = mutation({
   args: {
     internalKey: v.string(),
@@ -66,9 +78,42 @@ export const updateMessageContent = mutation({
   handler: async (ctx, args) => {
     validateInternalKey(args.internalKey);
 
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message) return;
+
+    // Prevent overwriting a terminal state
+    if (message.status === "cancelled") {
+      return;
+    }
+
     await ctx.db.patch(args.messageId, {
       content: args.content,
       status: "completed" as const,
+    });
+  },
+});
+
+export const updateMessageStreamContent = mutation({
+  args: {
+    internalKey: v.string(),
+    messageId: v.id("messages"),
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message) return;
+
+    // Do not stream into cancelled or already completed message
+    if (message.status === "cancelled" || message.status === "completed") {
+      return;
+    }
+
+    await ctx.db.patch(args.messageId, {
+      content: args.content,
+      // Keep status as processing while streaming
+      status: "processing" as const,
     });
   },
 });
@@ -85,6 +130,14 @@ export const updateMessageStatus = mutation({
   },
   handler: async (ctx, args) => {
     validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message) return;
+
+    // Terminal state protection: if already cancelled, ignore stale transitions
+    if (message.status === "cancelled" && args.status !== "cancelled") {
+      return;
+    }
 
     await ctx.db.patch(args.messageId, {
       status: args.status,
@@ -611,5 +664,247 @@ export const createProjectWithConversation = mutation({
     });
 
     return { projectId, conversationId };
+  },
+});
+
+// Execution Progress & Tool Activity Mutations and Queries
+export const recordExecutionStart = mutation({
+  args: {
+    internalKey: v.string(),
+    conversationId: v.id("conversations"),
+    projectId: v.id("projects"),
+    messageId: v.id("messages"),
+    executionId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message || message.status === "cancelled") return;
+
+    // Idempotency check: see if execution_start already exists
+    const existing = await ctx.db
+      .query("executionEvents")
+      .withIndex("by_execution", (q) => q.eq("executionId", args.executionId))
+      .filter((q) => q.eq(q.field("eventType"), "execution_start"))
+      .first();
+
+    if (existing) return existing._id;
+
+    return await ctx.db.insert("executionEvents", {
+      conversationId: args.conversationId,
+      projectId: args.projectId,
+      messageId: args.messageId,
+      executionId: args.executionId,
+      iteration: 0,
+      eventType: "execution_start",
+      status: "running",
+      startedAt: Date.now(),
+      summary: "Assistant execution started",
+    });
+  },
+});
+
+export const recordToolStart = mutation({
+  args: {
+    internalKey: v.string(),
+    conversationId: v.id("conversations"),
+    projectId: v.id("projects"),
+    messageId: v.id("messages"),
+    executionId: v.string(),
+    iteration: v.number(),
+    toolExecutionId: v.string(),
+    toolName: v.string(),
+    description: v.string(),
+    filePaths: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message || message.status === "cancelled") return;
+
+    // Verify conversation matches message
+    if (message.conversationId !== args.conversationId) {
+      throw new Error("Message does not belong to specified conversation");
+    }
+
+    // Check if tool execution event already exists (idempotency)
+    const existing = await ctx.db
+      .query("executionEvents")
+      .withIndex("by_tool_execution", (q) =>
+        q.eq("toolExecutionId", args.toolExecutionId),
+      )
+      .first();
+
+    if (existing) {
+      return existing._id;
+    }
+
+    return await ctx.db.insert("executionEvents", {
+      conversationId: args.conversationId,
+      projectId: args.projectId,
+      messageId: args.messageId,
+      executionId: args.executionId,
+      iteration: args.iteration,
+      eventType: "tool_start",
+      toolExecutionId: args.toolExecutionId,
+      toolName: args.toolName,
+      description: args.description,
+      filePaths: args.filePaths,
+      status: "running",
+      startedAt: Date.now(),
+    });
+  },
+});
+
+export const recordToolComplete = mutation({
+  args: {
+    internalKey: v.string(),
+    conversationId: v.id("conversations"),
+    messageId: v.id("messages"),
+    toolExecutionId: v.string(),
+    summary: v.string(),
+    filePaths: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message || message.status === "cancelled") return;
+
+    const event = await ctx.db
+      .query("executionEvents")
+      .withIndex("by_tool_execution", (q) =>
+        q.eq("toolExecutionId", args.toolExecutionId),
+      )
+      .first();
+
+    if (!event) return;
+
+    // If already terminal (e.g., cancelled or already failed/completed), do not overwrite with stale data
+    if (event.status === "cancelled") return;
+
+    await ctx.db.patch("executionEvents", event._id, {
+      status: "completed",
+      eventType: "tool_complete",
+      completedAt: Date.now(),
+      summary: args.summary,
+      ...(args.filePaths ? { filePaths: args.filePaths } : {}),
+    });
+  },
+});
+
+export const recordToolFail = mutation({
+  args: {
+    internalKey: v.string(),
+    conversationId: v.id("conversations"),
+    messageId: v.id("messages"),
+    toolExecutionId: v.string(),
+    error: v.string(),
+    summary: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message || message.status === "cancelled") return;
+
+    const event = await ctx.db
+      .query("executionEvents")
+      .withIndex("by_tool_execution", (q) =>
+        q.eq("toolExecutionId", args.toolExecutionId),
+      )
+      .first();
+
+    if (!event) return;
+    if (event.status === "cancelled") return;
+
+    await ctx.db.patch("executionEvents", event._id, {
+      status: "failed",
+      eventType: "tool_fail",
+      completedAt: Date.now(),
+      error: args.error,
+      summary: args.summary ?? `Tool execution failed: ${args.error}`,
+    });
+  },
+});
+
+export const recordExecutionEnd = mutation({
+  args: {
+    internalKey: v.string(),
+    conversationId: v.id("conversations"),
+    messageId: v.id("messages"),
+    executionId: v.string(),
+    status: v.union(
+      v.literal("completed"),
+      v.literal("cancelled"),
+      v.literal("failed"),
+    ),
+    summary: v.optional(v.string()),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    const message = await ctx.db.get("messages", args.messageId);
+    if (!message) return;
+
+    // If cancelled already, do not overwrite terminal cancelled status with completed/failed
+    if (message.status === "cancelled" && args.status !== "cancelled") {
+      return;
+    }
+
+    // Mark any running tool events for this execution as cancelled/completed/failed
+    const runningEvents = await ctx.db
+      .query("executionEvents")
+      .withIndex("by_execution", (q) => q.eq("executionId", args.executionId))
+      .filter((q) => q.eq(q.field("status"), "running"))
+      .collect();
+
+    const now = Date.now();
+    for (const runEvt of runningEvents) {
+      await ctx.db.patch("executionEvents", runEvt._id, {
+        status: args.status === "cancelled" ? "cancelled" : args.status === "failed" ? "failed" : "completed",
+        completedAt: now,
+        error: args.status === "cancelled" ? "Cancelled by user" : args.error,
+      });
+    }
+
+    // Insert terminal execution event
+    await ctx.db.insert("executionEvents", {
+      conversationId: args.conversationId,
+      projectId: message.projectId,
+      messageId: args.messageId,
+      executionId: args.executionId,
+      iteration: 0,
+      eventType:
+        args.status === "cancelled"
+          ? "execution_cancel"
+          : args.status === "failed"
+            ? "execution_fail"
+            : "execution_complete",
+      status: args.status,
+      startedAt: now,
+      completedAt: now,
+      summary: args.summary ?? `Execution ${args.status}`,
+      error: args.error,
+    });
+  },
+});
+
+export const getExecutionEventsByMessage = query({
+  args: {
+    internalKey: v.string(),
+    messageId: v.id("messages"),
+  },
+  handler: async (ctx, args) => {
+    validateInternalKey(args.internalKey);
+
+    return await ctx.db
+      .query("executionEvents")
+      .withIndex("by_message", (q) => q.eq("messageId", args.messageId))
+      .order("asc")
+      .collect();
   },
 });

@@ -102,3 +102,30 @@ export const getMessages = query({
       .collect();
   },
 });
+
+export const getExecutionEvents = query({
+  args: {
+    conversationId: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const identity = await verifyAuth(ctx);
+
+    const conversation = await ctx.db.get("conversations", args.conversationId);
+    if (!conversation) throw new Error("Conversation not found");
+
+    const project = await ctx.db.get("projects", conversation.projectId);
+    if (!project) throw new Error("Project not found");
+
+    if (project.ownerId !== identity.subject) {
+      throw new Error("Unauthorized to access this project");
+    }
+
+    return await ctx.db
+      .query("executionEvents")
+      .withIndex("by_conversation", (q) =>
+        q.eq("conversationId", args.conversationId),
+      )
+      .order("asc")
+      .collect();
+  },
+});

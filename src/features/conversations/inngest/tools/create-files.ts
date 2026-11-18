@@ -5,10 +5,13 @@ import { convex } from "@/lib/convex-client";
 
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
+import { ToolExecutionContext } from "./types";
+import { runTrackedTool } from "./tracker";
 
 interface CreateFilesToolOptions {
   projectId: Id<"projects">;
   internalKey: string;
+  context?: ToolExecutionContext;
 }
 
 const paramsSchema = z.object({
@@ -18,7 +21,7 @@ const paramsSchema = z.object({
       z.object({
         name: z.string().min(1, "File name cannot be empty"),
         content: z.string(),
-      })
+      }),
     )
     .min(1, "Provide at least one file to create"),
 });
@@ -26,6 +29,7 @@ const paramsSchema = z.object({
 export const createCreateFilesTool = ({
   projectId,
   internalKey,
+  context,
 }: CreateFilesToolOptions) => {
   return createTool({
     name: "createFiles",
@@ -35,14 +39,14 @@ export const createCreateFilesTool = ({
       parentId: z
         .string()
         .describe(
-          "The ID of the parent folder. Use empty string for root level. Must be a valid folder ID from listFiles."
+          "The ID of the parent folder. Use empty string for root level. Must be a valid folder ID from listFiles.",
         ),
       files: z
         .array(
           z.object({
             name: z.string().describe("The file name including extension"),
             content: z.string().describe("The file content"),
-          })
+          }),
         )
         .describe("Array of files to create"),
     }),
@@ -53,52 +57,90 @@ export const createCreateFilesTool = ({
       }
 
       const { parentId, files } = parsed.data;
+      const fileNames = files.map((f) => f.name);
 
       try {
-        return await toolStep?.run("create-files", async () => {
-          let resolvedParentId: Id<"files"> | undefined;
+        return await runTrackedTool(
+          context,
+          {
+            toolName: "createFiles",
+            description:
+              files.length === 1
+                ? `Creating ${files[0].name}...`
+                : `Creating ${files.length} files...`,
+            filePaths: fileNames,
+          },
+          async () => {
+            const runner = toolStep?.run
+              ? (name: string, fn: () => Promise<string>) =>
+                  toolStep.run(name, fn)
+              : (_: string, fn: () => Promise<string>) => fn();
 
-          if (parentId && parentId !== "") {
-            try {
-              resolvedParentId = parentId as Id<"files">;
-              const parentFolder = await convex.query(api.system.getFileById, {
+            let createdPaths: string[] = [];
+
+            const response = await runner("create-files", async () => {
+              let resolvedParentId: Id<"files"> | undefined;
+
+              if (parentId && parentId !== "") {
+                try {
+                  resolvedParentId = parentId as Id<"files">;
+                  const parentFolder = await convex.query(
+                    api.system.getFileById,
+                    {
+                      internalKey,
+                      fileId: resolvedParentId,
+                    },
+                  );
+                  if (!parentFolder) {
+                    throw new Error(
+                      `Parent folder with ID "${parentId}" not found. Use listFiles to get valid folder IDs.`,
+                    );
+                  }
+                  if (parentFolder.type !== "folder") {
+                    throw new Error(
+                      `The ID "${parentId}" is a file, not a folder. Use a folder ID as parentId.`,
+                    );
+                  }
+                } catch (err) {
+                  if (err instanceof Error) throw err;
+                  throw new Error(
+                    `Invalid parentId "${parentId}". Use listFiles to get valid folder IDs, or use empty string for root level.`,
+                  );
+                }
+              }
+
+              const results = await convex.mutation(api.system.createFiles, {
                 internalKey,
-                fileId: resolvedParentId,
+                projectId,
+                parentId: resolvedParentId,
+                files,
               });
-              if (!parentFolder) {
-                return `Error: Parent folder with ID "${parentId}" not found. Use listFiles to get valid folder IDs.`;
+
+              const created = results.filter((r) => !r.error);
+              const failed = results.filter((r) => r.error);
+
+              let resMsg = `Created ${created.length} file(s)`;
+              if (created.length > 0) {
+                resMsg += `: ${created.map((r) => r.name).join(", ")}`;
               }
-              if (parentFolder.type !== "folder") {
-                return `Error: The ID "${parentId}" is a file, not a folder. Use a folder ID as parentId.`;
+              if (failed.length > 0) {
+                resMsg += `. Failed: ${failed.map((r) => `${r.name} (${r.error})`).join(", ")}`;
               }
-            } catch {
-              return `Error: Invalid parentId "${parentId}". Use listFiles to get valid folder IDs, or use empty string for root level.`;
-            }
-          }
 
-          const results = await convex.mutation(api.system.createFiles, {
-            internalKey,
-            projectId,
-            parentId: resolvedParentId,
-            files,
-          });
+              createdPaths = created.map((r) => r.name);
+              return resMsg;
+            });
 
-          const created = results.filter((r) => !r.error);
-          const failed = results.filter((r) => r.error);
-
-          let response = `Created ${created.length} file(s)`;
-          if (created.length > 0) {
-            response += `: ${created.map((r) => r.name).join(", ")}`;
-          }
-          if (failed.length > 0) {
-            response += `. Failed: ${failed.map((r) => `${r.name} (${r.error})`).join(", ")}`;
-          }
-
-          return response;
-        });
+            return {
+              result: response,
+              summary: response,
+              filePaths: createdPaths.length > 0 ? createdPaths : fileNames,
+            };
+          },
+        );
       } catch (error) {
         return `Error creating files: ${error instanceof Error ? error.message : "Unknown error"}`;
       }
-    }
+    },
   });
 };

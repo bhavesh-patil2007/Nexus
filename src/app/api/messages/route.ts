@@ -46,6 +46,25 @@ export async function POST(request: Request) {
 
   const projectId = conversation.projectId;
 
+  const project = await convex.query(api.system.getProjectById, {
+    internalKey,
+    projectId,
+  });
+
+  if (!project) {
+    return NextResponse.json(
+      { error: "Project not found" },
+      { status: 404 },
+    );
+  }
+
+  if (project.ownerId !== userId) {
+    return NextResponse.json(
+      { error: "Unauthorized" },
+      { status: 403 },
+    );
+  }
+
   const processingMessages = await convex.query(
     api.system.getProcessingMessages,
     {
@@ -68,6 +87,15 @@ export async function POST(request: Request) {
           internalKey,
           messageId: msg._id,
           status: "cancelled",
+        });
+
+        await convex.mutation(api.system.recordExecutionEnd, {
+          internalKey,
+          conversationId: msg.conversationId,
+          messageId: msg._id,
+          executionId: `exec-${msg._id}`,
+          status: "cancelled",
+          summary: "Request cancelled by user",
         });
       }),
     );

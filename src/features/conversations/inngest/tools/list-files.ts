@@ -5,15 +5,19 @@ import { convex } from "@/lib/convex-client";
 
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
+import { ToolExecutionContext } from "./types";
+import { runTrackedTool } from "./tracker";
 
 interface ListFilesToolOptions {
   projectId: Id<"projects">;
   internalKey: string;
+  context?: ToolExecutionContext;
 }
 
 export const createListFilesTool = ({
   projectId,
   internalKey,
+  context,
 }: ListFilesToolOptions) => {
   return createTool({
     name: "listFiles",
@@ -22,32 +26,53 @@ export const createListFilesTool = ({
     parameters: z.object({}),
     handler: async (_, { step: toolStep }) => {
       try {
-        return await toolStep?.run("list-files", async () => {
-          const files = await convex.query(api.system.getProjectFiles, {
-            internalKey,
-            projectId,
-          });
+        return await runTrackedTool(
+          context,
+          {
+            toolName: "listFiles",
+            description: "Listing project files...",
+          },
+          async () => {
+            const runner = toolStep?.run
+              ? (name: string, fn: () => Promise<string>) =>
+                  toolStep.run(name, fn)
+              : (_: string, fn: () => Promise<string>) => fn();
 
-          // Sort: folders first, then files, alphabetically
-          const sorted = files.sort((a, b) => {
-            if (a.type !== b.type) {
-              return a.type === "folder" ? -1 : 1;
-            }
-            return a.name.localeCompare(b.name);
-          });
+            const jsonOutput = await runner("list-files", async () => {
+              const files = await convex.query(api.system.getProjectFiles, {
+                internalKey,
+                projectId,
+              });
 
-          const fileList = sorted.map((f) => ({
-            id: f._id,
-            name: f.name,
-            type: f.type,
-            parentId: f.parentId ?? null,
-          }));
+              // Sort: folders first, then files, alphabetically
+              const sorted = files.sort((a, b) => {
+                if (a.type !== b.type) {
+                  return a.type === "folder" ? -1 : 1;
+                }
+                return a.name.localeCompare(b.name);
+              });
 
-          return JSON.stringify(fileList);
-        })
+              const fileList = sorted.map((f) => ({
+                id: f._id,
+                name: f.name,
+                type: f.type,
+                parentId: f.parentId ?? null,
+              }));
+
+              return JSON.stringify(fileList);
+            });
+
+            const parsed = JSON.parse(jsonOutput);
+            const count = Array.isArray(parsed) ? parsed.length : 0;
+            return {
+              result: jsonOutput,
+              summary: `Found ${count} project item${count === 1 ? "" : "s"}`,
+            };
+          },
+        );
       } catch (error) {
         return `Error listing files: ${error instanceof Error ? error.message : "Unknown error"}`;
       }
-    }
+    },
   });
 };

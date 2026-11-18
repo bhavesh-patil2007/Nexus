@@ -21,3 +21,12 @@ export const useConversations = (projectId: Id<"projects">) => {
 export const useCreateConversation = () => {
   return useMutation(api.conversations.create);
 };
+
+export const useExecutionEvents = (
+  conversationId: Id<"conversations"> | null,
+) => {
+  return useQuery(
+    api.conversations.getExecutionEvents,
+    conversationId ? { conversationId } : "skip",
+  );
+};

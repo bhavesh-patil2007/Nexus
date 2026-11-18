@@ -5,9 +5,12 @@ import { convex } from "@/lib/convex-client";
 
 import { api } from "../../../../../convex/_generated/api";
 import { Id } from "../../../../../convex/_generated/dataModel";
+import { ToolExecutionContext } from "./types";
+import { runTrackedTool } from "./tracker";
 
 interface UpdateFileToolOptions {
   internalKey: string;
+  context?: ToolExecutionContext;
 }
 
 const paramsSchema = z.object({
@@ -17,6 +20,7 @@ const paramsSchema = z.object({
 
 export const createUpdateFileTool = ({
   internalKey,
+  context,
 }: UpdateFileToolOptions) => {
   return createTool({
     name: "updateFile",
@@ -39,7 +43,6 @@ export const createUpdateFileTool = ({
         fileId: fileId as Id<"files">,
       });
 
-
       if (!file) {
         return `Error: File with ID "${fileId}" not found. Use listFiles to get valid file IDs.`;
       }
@@ -49,18 +52,39 @@ export const createUpdateFileTool = ({
       }
 
       try {
-        return await toolStep?.run("update-file", async () => {
-          await convex.mutation(api.system.updateFile, {
-            internalKey,
-            fileId: fileId as Id<"files">,
-            content,
-          });
+        return await runTrackedTool(
+          context,
+          {
+            toolName: "updateFile",
+            description: `Updating ${file.name}...`,
+            filePaths: [file.name],
+          },
+          async () => {
+            const runner = toolStep?.run
+              ? (name: string, fn: () => Promise<string>) =>
+                  toolStep.run(name, fn)
+              : (_: string, fn: () => Promise<string>) => fn();
 
-          return `File "${file.name}" updated successfully`;
-        })
+            const message = await runner("update-file", async () => {
+              await convex.mutation(api.system.updateFile, {
+                internalKey,
+                fileId: fileId as Id<"files">,
+                content,
+              });
+
+              return `File "${file.name}" updated successfully`;
+            });
+
+            return {
+              result: message,
+              summary: `Updated ${file.name}`,
+              filePaths: [file.name],
+            };
+          },
+        );
       } catch (error) {
         return `Error update file: ${error instanceof Error ? error.message : "Unknown error"}`;
       }
-    }
+    },
   });
 };
