@@ -1,222 +1,274 @@
-# 🚀 Nexus — Build Your Own AI-Powered IDE
+# 🚀 Nexus — Browser-Based AI-Powered IDE
 
-## 📸 Screenshot
+Nexus is a full-featured, browser-based, AI-native Integrated Development Environment (IDE). It combines intelligent code suggestions, natural-language editing, conversation-driven assistant workflows, in-browser containerized execution, and real-time cloud persistence.
+
+---
+
+## 📸 Overview
 
 ![Nexus IDE Screenshot](./public/image.png)
 
----
+### Core Capabilities
 
-## ✨ What is Nexus?
-
-Nexus is a **browser-based AI-powered IDE**, designed to bring intelligent coding and collaboration directly into the browser.
-
-### 🔥 Features
-
-- ⚡ Real-time collaborative code editing  
-- 🤖 AI-powered code suggestions (ghost text)  
-- ⌘ Quick edit with natural language (Cmd + K)  
-- 💬 Conversation-based AI assistant  
-- 🌐 In-browser execution with WebContainer  
-- 📁 Multi-file project management  
-- 🔗 GitHub import/export (planned)
+- ⚡ **Real-Time Workspace Sync:** Instant reactive state synchronization and file persistence powered by Convex.
+- 🤖 **AI Code Generation & Ghost Text:** Inline real-time code completion using OpenAI.
+- ⌘ **Quick Edit (Cmd + K):** Natural language in-place code modification with automatic context extraction and optional documentation scraping via Firecrawl.
+- 💬 **Conversation-Based AI Assistant:** Full assistant chat sidebar running multi-step background tool execution workflows via Inngest.
+- 🌐 **In-Browser Execution:** Client-side Node.js container execution and interactive terminal powered by the WebContainer API and xterm.js.
+- 📁 **File & Tree Management:** Hierarchical multi-file and multi-folder explorer with tabbed editing, dirty tab indicators, and conflict detection.
+- 🔗 **GitHub Integration:** OAuth-authenticated repository import and multi-step batch export via Clerk and Inngest.
 
 ---
 
-## 🧰 Tech Stack
+## 🧰 Technology Stack
 
-| Category      | Technologies |
-|--------------|-------------|
-| **Frontend**  | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
-| **Editor**    | CodeMirror 6, Custom Extensions |
-| **Backend**   | Convex, Inngest |
-| **AI**        | OpenAI GPT-4.1 Mini |
-| **Auth**      | Clerk |
-| **Execution** | WebContainer API, xterm.js |
-| **UI**        | shadcn/ui, Radix UI |
-
----
-
-## 🧩 Project Phases
-
-### 🔹 Core Setup
-
-- Branch 1: Project Setup & UI Theme  
-- Branch 2: Clerk Authentication  
-- Branch 3: Convex Real-time Database  
-- Branch 4: Inngest Jobs  
-- Branch 5: Firecrawl Integration  
-- Branch 6: Sentry Monitoring  
-- Branch 7: Dashboard  
-
-### 🧠 IDE Development
-
-- Branch 8: IDE Layout  
-- Branch 9: File Explorer  
-- Branch 10: Code Editor  
-
-### 🤖 AI Features
-
-- Branch 11: AI Suggestions  
-- Branch 12: Conversation System  
-
-### 🚧 More Features
-
-- Branch 13: AI Agent  
-- Branch 14: WebContainer Execution  
-- Branch 15: GitHub Integration  
-- Branch 16: AI Project Generation  
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend Framework** | Next.js 16 (App Router, Turbopack), React 19, TypeScript |
+| **Styling & Components**| Tailwind CSS 4, Radix UI, shadcn/ui, Lucide Icons |
+| **Code Editor** | CodeMirror 6 (with custom language extensions, minimap, indentation markers) |
+| **Database & Real-time**| Convex (reactive subscriptions, queries, mutations, document storage) |
+| **Background Orchestration** | Inngest (durable execution, event-driven retries, and agent workflows) |
+| **AI SDK & Models** | OpenAI (`gpt-4.1-mini`), Vercel AI SDK (`ai`), `@inngest/agent-kit` |
+| **Authentication** | Clerk (JWT authentication, GitHub OAuth token management) |
+| **In-Browser Execution**| WebContainer API (`@webcontainer/api`), xterm.js |
+| **Documentation Scraping**| Firecrawl (`@mendable/firecrawl-js`) |
+| **Monitoring** | Sentry (`@sentry/nextjs`) |
+| **Testing** | Vitest, React Testing Library, JSDOM |
 
 ---
 
-## ⚙️ Getting Started
+## ⚙️ Prerequisites
 
-### 📌 Prerequisites
+Before you begin, ensure you have the following installed on your machine:
 
-- Node.js 20+  
-- npm / pnpm  
-- Required accounts:
-  - Clerk  
-  - Convex  
-  - Inngest  
-  - OpenAI  
+- **Node.js:** `v20.x` or higher (verified on Node 20 and Node 24)
+- **Package Manager:** `npm` (v10+; uses committed `package-lock.json`)
+- **Git:** `v2.30+`
+
+### Required External Service Accounts
+
+To run the complete application with all capabilities, you will need free developer accounts on:
+
+1. **[Clerk](https://clerk.com):** User authentication and session management.
+2. **[Convex](https://www.convex.dev):** Real-time database and document backend.
+3. **[Inngest](https://www.inngest.com):** Background workflow execution (local dev server provided by Inngest CLI).
+4. **[OpenAI](https://platform.openai.com):** API key for AI assistant and quick edits.
+
+*(Optional)* **[Firecrawl](https://www.firecrawl.dev):** For scraping web documentation when URLs are included in Cmd+K quick edits.
+*(Optional)* **[GitHub](https://github.com):** For GitHub repository import and export via Clerk OAuth.
 
 ---
 
-### 🔧 Installation
+## 🚀 Quick Start Guide
+
+### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/shashankkshyp/nexus.git
-cd nexus
+git clone https://github.com/shashankkshyp/Nexus.git
+cd Nexus
+```
+
+### 2. Install Dependencies
+
+Install the project dependencies using the committed lockfile:
+
+```bash
 npm install
 ```
 
-### 🔑 Environment Setup
+---
 
+## 🔑 Environment Configuration
+
+Copy the example environment file to `.env.local`:
+
+**macOS / Linux / Git Bash:**
 ```bash
 cp .env.example .env.local
 ```
 
-**Clerk**
-```
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
-CLERK_SECRET_KEY=
-```
-
-**Convex**
-```
-NEXT_PUBLIC_CONVEX_URL=
-CONVEX_DEPLOYMENT=
-NEXUS_CONVEX_INTERNAL_KEY=
+**Windows PowerShell:**
+```powershell
+Copy-Item .env.example .env.local
 ```
 
-**AI**
-```
-OPENAI_API_KEY=
+Open `.env.local` in your editor. Refer to [.env.example](.env.example) for detailed variable comments.
+
+---
+
+## 🛠️ Step-by-Step Service Setup
+
+### Step 1: Convex Setup
+
+Convex acts as the real-time database and document store.
+
+1. **Log in to Convex and initialize your project:**
+   ```bash
+   npx convex dev
+   ```
+2. If prompted, log in to your Convex account and select or create a project.
+3. Once created, the Convex CLI will automatically configure your local deployment URL (`NEXT_PUBLIC_CONVEX_URL`) and deployment identifier (`CONVEX_DEPLOYMENT`) in your `.env.local`.
+
+---
+
+### Step 2: Clerk Authentication Setup
+
+1. Go to the **[Clerk Dashboard](https://dashboard.clerk.com)** and create a new application (e.g., "Nexus IDE").
+2. Choose **Email** and/or **GitHub** as authentication providers.
+3. In the Clerk Dashboard, navigate to **API Keys** and copy:
+   - **Publishable Key:** Set as `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` in `.env.local`.
+   - **Secret Key:** Set as `CLERK_SECRET_KEY` in `.env.local`.
+4. Configure Clerk authentication for Convex:
+   - In Clerk Dashboard, navigate to **Configure > JWT Templates** and click **New template**.
+   - Select the **Convex** template.
+   - Note the **Issuer** URL (e.g., `https://verb-noun-00.clerk.accounts.dev`).
+   - Copy this Issuer URL and set it as an environment variable in your Convex deployment:
+     ```bash
+     npx convex env set CLERK_JWT_ISSUER_DOMAIN https://your-clerk-issuer-domain.clerk.accounts.dev
+     ```
+   *(Note: This allows Convex to securely authenticate Clerk session tokens via `convex/auth.config.ts`)*.
+
+---
+
+### Step 3: GitHub OAuth through Clerk (For GitHub Import / Export)
+
+Nexus provides built-in repository import and export via GitHub. This uses Clerk's OAuth token store:
+
+1. In the **Clerk Dashboard**, go to **User & Authentication > Social Connections**.
+2. Enable **GitHub**.
+3. Under the GitHub connection settings:
+   - For quick development, you can use Clerk's shared credentials or provide custom credentials.
+   - For custom credentials, create an OAuth App in **GitHub Settings > Developer settings > OAuth Apps**:
+     - **Homepage URL:** `http://localhost:3000`
+     - **Authorization callback URL:** Copy the exact redirect URL provided by Clerk in the social connections dialog (e.g., `https://clerk.your-domain.com/v1/oauth_callback`).
+   - Ensure the required scopes (`repo`, `read:user`) are permitted so Nexus can read and push repositories on behalf of the user.
+4. When signed in to Nexus, users can link their GitHub account directly from the navbar or export modal.
+
+---
+
+### Step 4: Internal Service Key Configuration (`NEXUS_CONVEX_INTERNAL_KEY`)
+
+Nexus secures communication between backend Next.js API routes, Inngest background workers, and internal Convex system mutations using a shared secret: `NEXUS_CONVEX_INTERNAL_KEY`.
+
+> [!IMPORTANT]
+> The value of `NEXUS_CONVEX_INTERNAL_KEY` **must match exactly** in both `.env.local` and your Convex deployment environment.
+
+1. **Generate a secure random key:**
+
+   *macOS / Linux / Git Bash:*
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   *Windows PowerShell:*
+   ```powershell
+   -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+   ```
+
+2. **Set in `.env.local`:**
+   ```env
+   NEXUS_CONVEX_INTERNAL_KEY=your_generated_32_byte_hex_key
+   ```
+
+3. **Set in Convex Deployment:**
+   ```bash
+   npx convex env set NEXUS_CONVEX_INTERNAL_KEY your_generated_32_byte_hex_key
+   ```
+
+**Security Rules:**
+- Never commit this key to Git.
+- Never prefix with `NEXT_PUBLIC_` (must never be sent to the browser).
+- To rotate: generate a new hex string, update `.env.local`, update with `npx convex env set`, and restart your Next.js server.
+
+---
+
+### Step 5: OpenAI Configuration
+
+Add your OpenAI API key to `.env.local`:
+
+```env
+OPENAI_API_KEY=sk-proj-your_openai_api_key_here
 ```
 
-**Optional**
-```
-FIRECRAWL_API_KEY=
-SENTRY_DSN=
-```
+Nexus uses `gpt-4.1-mini` via the Vercel AI SDK for ghost text suggestions, quick edit instructions, and conversation responses.
 
-### ▶️ Run the App
+---
 
+## ▶️ Running the Application Locally
+
+Running the full Nexus development environment requires three processes:
+
+### Terminal 1: Convex Backend
 ```bash
-# Convex
 npx convex dev
+```
+Runs the Convex sync server, database watchers, and function compiler.
 
-# Next.js
-npm run dev
-
-# Inngest
+### Terminal 2: Inngest Dev Server
+```bash
 npx inngest-cli@latest dev
 ```
+Starts the local Inngest background engine (opens UI at `http://localhost:8288`), which polls `http://localhost:3000/api/inngest` to process asynchronous jobs (AI agent messages, GitHub imports, and GitHub exports).
 
-Open 👉 [http://localhost:3000](http://localhost:3000)
-
----
-
-## 📁 Project Structure
-
+### Terminal 3: Next.js Web Server
+```bash
+npm run dev
 ```
-src/
-├── app/
-│   ├── api/
-│   │   ├── messages/
-│   │   ├── suggestion/
-│   │   └── quick-edit/
-│   └── projects/
-├── components/
-│   ├── ui/
-│   └── ai-elements/
-├── features/
-│   ├── auth/
-│   ├── conversations/
-│   ├── editor/
-│   ├── preview/
-│   └── projects/
-├── inngest/
-└── lib/
-
-convex/
-├── schema.ts
-├── projects.ts
-├── files.ts
-├── conversations.ts
-└── system.ts
-```
+Starts the Next.js frontend and App Router API at [http://localhost:3000](http://localhost:3000).
 
 ---
 
-## ⚡ Features
+## 🧪 Testing and Quality Checks
 
-### 📝 Editor
-- Syntax highlighting
-- Minimap & code folding
-- Multi-cursor editing
-- Bracket matching
-
-### 🤖 AI Capabilities
-- Ghost text suggestions
-- Cmd + K quick edits
-- Inline actions
-- Chat assistant
-
-### 📂 File Management
-- File explorer
-- Create / rename / delete
-- Tab navigation
-- Auto-save
-
-### 🔄 Real-time
-- Instant sync with Convex
-- Optimistic UI updates
-- Background jobs
-
-
----
-
-## 📜 Scripts
+Verify code quality and test coverage using the following repository scripts:
 
 ```bash
-npm run dev      # Start development server
-npm run build    # Build for production
-npm run start    # Start production server
-npm run lint     # Run ESLint
+# Run automated unit test suite with Vitest
+npm test
+
+# Run TypeScript compilation and typecheck
+npm run typecheck
+
+# Run full project ESLint
+npm run lint
+
+# Build production application
+npm run build
 ```
 
 ---
 
-## 🙌 Acknowledgements
+## 🔧 Troubleshooting Common Issues
 
-- [VS Code](https://github.com/microsoft/vscode)
-- [Orchids](https://orchids.app)
-- [shadcn/ui](https://ui.shadcn.com)
-- [CodeMirror](https://codemirror.net)
+### 1. `NEXUS_CONVEX_INTERNAL_KEY is not configured` or `Invalid internal key`
+- **Cause:** The internal secret is either missing or does not match between `.env.local` and Convex.
+- **Fix:** Re-check `.env.local` and verify the Convex secret by running:
+  ```bash
+  npx convex env get NEXUS_CONVEX_INTERNAL_KEY
+  ```
+  Ensure both strings are identical.
+
+### 2. `Client created with undefined deployment address`
+- **Cause:** `NEXT_PUBLIC_CONVEX_URL` is empty or undefined.
+- **Fix:** Run `npx convex dev` to re-populate `.env.local`, or copy the URL from your Convex Dashboard.
+
+### 3. `API key is required for the cloud API` (Firecrawl)
+- **Cause:** `FIRECRAWL_API_KEY` is not set when calling Cmd+K quick edit with external URLs.
+- **Fix:** Obtain a free API key at [firecrawl.dev](https://firecrawl.dev) and add `FIRECRAWL_API_KEY=fc-...` to `.env.local`.
+
+### 4. GitHub Import/Export: `GitHub token not found`
+- **Cause:** The signed-in user has not authorized GitHub OAuth through Clerk, or the required OAuth scopes were not requested.
+- **Fix:** Re-authenticate with GitHub via Clerk or re-connect GitHub under your user profile settings in the app.
+
+### 5. WebContainer Cross-Origin Isolation Errors
+- **Cause:** WebContainer requires `SharedArrayBuffer` support via specific HTTP security headers.
+- **Fix:** Nexus already includes these in [next.config.ts](next.config.ts) (`Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin`). Ensure you are accessing the app via `http://localhost:3000` rather than raw IP addresses.
 
 ---
 
-## 💡 Vision
+## 📖 Further Reading
 
-Build a fully AI-native development environment where coding, debugging, and collaboration happen seamlessly with AI — directly in the browser.
+- [Contributing Guidelines](CONTRIBUTING.md) — Branch conventions, commit style, and PR process.
+- [Architecture Guide](docs/architecture.md) — System design, message lifecycle, and background agent workflows.
+- [Code of Conduct](CODE_OF_CONDUCT.md)
