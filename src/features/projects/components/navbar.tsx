@@ -184,6 +184,7 @@ export const Navbar = ({
           size="icon-sm"
           className="size-7 text-muted-foreground hover:text-foreground"
           title="Project settings"
+          aria-label="Project settings"
           onClick={() => setSettingsOpen(true)}
         >
           <SettingsIcon className="size-4" />
