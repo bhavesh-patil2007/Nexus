@@ -6,7 +6,7 @@ import { openai } from "@ai-sdk/openai";
 
 import { firecrawl } from "@/lib/firecrawl";
 
-const quickEditSchema = z.object({
+export const quickEditSchema = z.object({
   editedCode: z
     .string()
     .describe(
@@ -14,9 +14,9 @@ const quickEditSchema = z.object({
     ),
 });
 
-const URL_REGEX = /https?:\/\/[^\s)>\]]+/g;
+export const URL_REGEX = /https?:\/\/[^\s)>\]]+/g;
 
-const QUICK_EDIT_PROMPT = `You are a code editing assistant. Edit the selected code based on the user's instruction.
+export const QUICK_EDIT_PROMPT = `You are a code editing assistant. Edit the selected code based on the user's instruction.
 
 <context>
 <selected_code>
