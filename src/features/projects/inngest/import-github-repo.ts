@@ -8,6 +8,7 @@ import { inngest } from "@/inngest/client";
 
 import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
+import { mapWithConcurrency, withExponentialBackoff } from "./utils";
 
 interface ImportGithubRepoEvent {
   owner: string;
@@ -15,6 +16,10 @@ interface ImportGithubRepoEvent {
   projectId: Id<"projects">;
   githubToken: string;
 }
+
+// Configurable constants for chunking and concurrency
+export const IMPORT_BATCH_SIZE = 50;
+export const IMPORT_CONCURRENCY_LIMIT = 5;
 
 export const importGithubRepo = inngest.createFunction(
   {
@@ -24,12 +29,29 @@ export const importGithubRepo = inngest.createFunction(
       if (!internalKey) return;
 
       const { projectId } = event.data.event.data as ImportGithubRepoEvent;
+      const errorMsg = event.data.error?.message || "Import failed";
 
       await step.run("set-failed-status", async () => {
         await convex.mutation(api.system.updateImportStatus, {
           internalKey,
           projectId,
           status: "failed",
+        });
+
+        await convex.mutation(api.system.updateImportProgress, {
+          internalKey,
+          projectId,
+          progress: {
+            status: "failed",
+            totalFiles: 0,
+            processedFiles: 0,
+            successfulFiles: 0,
+            failedFiles: 1,
+            skippedFiles: 0,
+            currentBatch: 0,
+            totalBatches: 0,
+            errorMessage: errorMsg,
+          },
         });
       });
     },
@@ -57,31 +79,31 @@ export const importGithubRepo = inngest.createFunction(
     });
 
     const tree = await step.run("fetch-repo-tree", async () => {
-      try {
-        const { data } = await octokit.rest.git.getTree({
-          owner,
-          repo,
-          tree_sha: "main",
-          recursive: "1",
-        });
+      return await withExponentialBackoff(async () => {
+        try {
+          const { data } = await octokit.rest.git.getTree({
+            owner,
+            repo,
+            tree_sha: "main",
+            recursive: "1",
+          });
 
-        return data;
-      } catch {
-        // Fallback to master branch
-        const { data } = await octokit.rest.git.getTree({
-          owner,
-          repo,
-          tree_sha: "master",
-          recursive: "1",
-        });
+          return data;
+        } catch {
+          // Fallback to master branch
+          const { data } = await octokit.rest.git.getTree({
+            owner,
+            repo,
+            tree_sha: "master",
+            recursive: "1",
+          });
 
-        return data;
-      }
+          return data;
+        }
+      });
     });
 
     // Sort folders by depth so parents are created before children
-    // Input:  [{ path: "src/components" }, { path: "src" }, { path: "src/components/ui" }]
-    // Output: [{ path: "src" }, { path: "src/components" }, { path: "src/components/ui" }]
     const folders = tree.tree
       .filter((item) => item.type === "tree" && item.path)
       .sort((a, b) => {
@@ -91,8 +113,7 @@ export const importGithubRepo = inngest.createFunction(
         return aDepth - bDepth;
       });
 
-    // Return the folder map from the step so it can be used in subsequent steps
-    // (Inngest serializes step results, so we use a plain object instead of Map)
+    // Create folders sequentially by depth to maintain hierarchical parentId mapping
     const folderIdMap = await step.run("create-folders", async () => {
       const map: Record<string, Id<"files">> = {};
 
@@ -122,70 +143,198 @@ export const importGithubRepo = inngest.createFunction(
       (item) => item.type === "blob" && item.path && item.sha,
     );
 
-    await step.run("create-files", async () => {
-      for (const file of allFiles) {
-        if (!file.path || !file.sha) continue;
+    const totalFiles = allFiles.length;
+    const totalBatches = Math.max(1, Math.ceil(totalFiles / IMPORT_BATCH_SIZE));
 
-        try {
-          const { data: blob } = await octokit.rest.git.getBlob({
-            owner,
-            repo,
-            file_sha: file.sha,
-          });
-
-          const buffer = Buffer.from(blob.content, "base64");
-          const isBinary = await isBinaryFile(buffer);
-
-          const pathParts = file.path.split("/");
-          const name = pathParts.pop()!;
-          const parentPath = pathParts.join("/");
-          const parentId = parentPath ? folderIdMap[parentPath] : undefined;
-
-          if (isBinary) {
-            const uploadUrl = await convex.mutation(
-              api.system.generateUploadUrl,
-              { internalKey },
-            );
-
-            const { storageId } = await ky
-              .post(uploadUrl, {
-                headers: { "Content-Type": "application/octet-stream" },
-                body: buffer,
-              })
-              .json<{ storageId: Id<"_storage"> }>();
-
-            await convex.mutation(api.system.createBinaryFile, {
-              internalKey,
-              projectId,
-              name,
-              storageId,
-              parentId,
-            });
-          } else {
-            const content = buffer.toString("utf-8");
-
-            await convex.mutation(api.system.createFile, {
-              internalKey,
-              projectId,
-              name,
-              content,
-              parentId,
-            });
-          }
-        } catch {
-          console.error(`Failed to import file: ${file.path}`);
-        }
-      }
+    // Initialize progress record in Convex
+    await step.run("init-progress", async () => {
+      await convex.mutation(api.system.updateImportProgress, {
+        internalKey,
+        projectId,
+        progress: {
+          status: totalFiles === 0 ? "completed" : "running",
+          totalFiles,
+          processedFiles: 0,
+          successfulFiles: 0,
+          failedFiles: 0,
+          skippedFiles: 0,
+          currentBatch: 0,
+          totalBatches,
+        },
+      });
     });
 
+    let overallProcessed = 0;
+    let overallSuccessful = 0;
+    let overallFailed = 0;
+    let overallSkipped = 0;
+
+    // Process files in chunked batches across Inngest steps
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const start = batchIndex * IMPORT_BATCH_SIZE;
+      const end = Math.min(start + IMPORT_BATCH_SIZE, totalFiles);
+      const batchFiles = allFiles.slice(start, end);
+
+      if (batchFiles.length === 0) continue;
+
+      const batchResult = await step.run(
+        `process-file-batch-${batchIndex + 1}-of-${totalBatches}`,
+        async () => {
+          let batchSuccess = 0;
+          let batchFailed = 0;
+          let batchSkipped = 0;
+
+          await mapWithConcurrency(
+            batchFiles,
+            IMPORT_CONCURRENCY_LIMIT,
+            async (file) => {
+              if (!file.path || !file.sha) {
+                batchSkipped++;
+                return;
+              }
+
+              try {
+                // Fetch blob with exponential backoff & rate-limit handling
+                const { data: blob } = await withExponentialBackoff(
+                  async () => {
+                    return await octokit.rest.git.getBlob({
+                      owner,
+                      repo,
+                      file_sha: file.sha!,
+                    });
+                  },
+                );
+
+                const buffer = Buffer.from(blob.content, "base64");
+                let isBinary = false;
+                try {
+                  isBinary = await isBinaryFile(buffer);
+                } catch {
+                  isBinary = false;
+                }
+
+                const pathParts = file.path.split("/");
+                const name = pathParts.pop()!;
+                const parentPath = pathParts.join("/");
+                const parentId = parentPath
+                  ? folderIdMap[parentPath]
+                  : undefined;
+
+                if (isBinary) {
+                  try {
+                    const uploadUrl = await convex.mutation(
+                      api.system.generateUploadUrl,
+                      { internalKey },
+                    );
+
+                    const { storageId } = await ky
+                      .post(uploadUrl, {
+                        headers: { "Content-Type": "application/octet-stream" },
+                        body: buffer,
+                      })
+                      .json<{ storageId: Id<"_storage"> }>();
+
+                    await convex.mutation(api.system.createBinaryFile, {
+                      internalKey,
+                      projectId,
+                      name,
+                      storageId,
+                      parentId,
+                    });
+                    batchSuccess++;
+                  } catch (binErr) {
+                    // Non-critical binary file failure should not abort the whole import
+                    console.warn(
+                      `Binary file upload skipped/failed for ${file.path}:`,
+                      binErr,
+                    );
+                    batchFailed++;
+                  }
+                } else {
+                  const content = buffer.toString("utf-8");
+
+                  await convex.mutation(api.system.createFile, {
+                    internalKey,
+                    projectId,
+                    name,
+                    content,
+                    parentId,
+                  });
+                  batchSuccess++;
+                }
+              } catch (err) {
+                console.error(`Failed to import file: ${file.path}`, err);
+                batchFailed++;
+              }
+            },
+          );
+
+          return {
+            processed: batchFiles.length,
+            success: batchSuccess,
+            failed: batchFailed,
+            skipped: batchSkipped,
+          };
+        },
+      );
+
+      overallProcessed += batchResult.processed;
+      overallSuccessful += batchResult.success;
+      overallFailed += batchResult.failed;
+      overallSkipped += batchResult.skipped;
+
+      // Update progress in Convex after each batch
+      await step.run(
+        `update-progress-batch-${batchIndex + 1}-of-${totalBatches}`,
+        async () => {
+          await convex.mutation(api.system.updateImportProgress, {
+            internalKey,
+            projectId,
+            progress: {
+              status: "running",
+              totalFiles,
+              processedFiles: overallProcessed,
+              successfulFiles: overallSuccessful,
+              failedFiles: overallFailed,
+              skippedFiles: overallSkipped,
+              currentBatch: batchIndex + 1,
+              totalBatches,
+            },
+          });
+        },
+      );
+    }
+
+    // Terminal completion status
     await step.run("set-completed-status", async () => {
       await convex.mutation(api.system.updateImportStatus, {
         internalKey,
         projectId,
         status: "completed",
       });
+
+      await convex.mutation(api.system.updateImportProgress, {
+        internalKey,
+        projectId,
+        progress: {
+          status: "completed",
+          totalFiles,
+          processedFiles: overallProcessed,
+          successfulFiles: overallSuccessful,
+          failedFiles: overallFailed,
+          skippedFiles: overallSkipped,
+          currentBatch: totalBatches,
+          totalBatches,
+        },
+      });
     });
 
-    return { success: true, projectId };
+    return {
+      success: true,
+      projectId,
+      totalFiles,
+      importedFiles: overallSuccessful,
+      failedFiles: overallFailed,
+    };
   },
 );

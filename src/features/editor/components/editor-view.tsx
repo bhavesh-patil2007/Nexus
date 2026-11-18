@@ -1,6 +1,6 @@
 import Image from "next/image";
-import { useRef } from "react";
-import { AlertTriangleIcon } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
+import { AlertTriangleIcon, CheckIcon, RefreshCwIcon, SaveIcon } from "lucide-react";
 
 import { useFile, useUpdateFile } from "@/features/projects/hooks/use-files";
 
@@ -13,20 +13,173 @@ import { Id } from "../../../../convex/_generated/dataModel";
 const DEBOUNCE_MS = 1500;
 
 export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
-  const { activeTabId } = useEditor(projectId);
+  const {
+    activeTabId,
+    getTabData,
+    updateBuffer,
+    markSavingStart,
+    markSavingSuccess,
+    markSavingError,
+    handleRemoteUpdate,
+    resolveConflictKeepLocal,
+    resolveConflictAcceptRemote,
+    hasDirtyTabs,
+  } = useEditor(projectId);
+
   const activeFile = useFile(activeTabId);
   const updateFile = useUpdateFile();
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Browser navigation and close protection (beforeunload)
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasDirtyTabs()) {
+        e.preventDefault();
+        // Standard modern browser convention: setting returnValue triggers confirmation dialog
+        e.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [hasDirtyTabs]);
+
+  // Synchronize remote Convex updates with local editor store
+  useEffect(() => {
+    if (activeFile && !activeFile.storageId && activeFile.content !== undefined) {
+      handleRemoteUpdate(
+        activeFile._id,
+        activeFile.content,
+        activeFile.updatedAt
+      );
+    }
+  }, [activeFile, handleRemoteUpdate]);
+
+  const activeTabData = activeTabId ? getTabData(activeTabId) : undefined;
+  const isDirty = activeTabData?.isDirty ?? false;
+  const isSaving = activeTabData?.isSaving ?? false;
+  const saveError = activeTabData?.saveError ?? null;
+  const hasConflict = activeTabData?.hasConflict ?? false;
+
+  // Immediate save implementation (used by debounce and manual shortcut Ctrl+S / Cmd+S)
+  const performSave = useCallback(
+    async (fileId: Id<"files">) => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+
+      const contentToSave = markSavingStart(fileId);
+      if (contentToSave === null) return;
+
+      try {
+        await updateFile({ id: fileId, content: contentToSave });
+        markSavingSuccess(fileId, contentToSave, Date.now());
+      } catch (err: unknown) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to save file";
+        markSavingError(fileId, errorMsg);
+      }
+    },
+    [markSavingStart, markSavingSuccess, markSavingError, updateFile]
+  );
+
+  const handleManualSave = useCallback(() => {
+    if (activeTabId) {
+      performSave(activeTabId);
+    }
+  }, [activeTabId, performSave]);
+
+  const handleBufferChange = useCallback(
+    (newContent: string) => {
+      if (!activeTabId) return;
+
+      updateBuffer(activeTabId, newContent);
+
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+
+      timeoutRef.current = setTimeout(() => {
+        performSave(activeTabId);
+      }, DEBOUNCE_MS);
+    },
+    [activeTabId, updateBuffer, performSave]
+  );
+
   const isActiveFileBinary = activeFile && activeFile.storageId;
   const isActiveFileText = activeFile && !activeFile.storageId;
+
+  // Initial content for editor: local dirty/clean buffer if present, otherwise remote activeFile content
+  const editorValue =
+    activeTabData?.buffer !== undefined
+      ? activeTabData.buffer
+      : (activeFile?.content ?? "");
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center">
         <TopNavigation projectId={projectId} />
       </div>
-      {activeTabId && <FileBreadcrumbs projectId={projectId} />}
+      <div className="flex items-center justify-between border-b px-2 py-0.5 text-xs text-muted-foreground bg-muted/20">
+        <div className="flex items-center">
+          {activeTabId && <FileBreadcrumbs projectId={projectId} />}
+        </div>
+        <div className="flex items-center gap-2 pr-2">
+          {isSaving && (
+            <span className="flex items-center gap-1 text-blue-500">
+              <RefreshCwIcon className="size-3 animate-spin" /> Saving...
+            </span>
+          )}
+          {!isSaving && saveError && (
+            <span className="flex items-center gap-1 text-red-500 font-medium">
+              <AlertTriangleIcon className="size-3" /> Save failed: {saveError}
+            </span>
+          )}
+          {!isSaving && !saveError && isDirty && (
+            <span className="flex items-center gap-1 text-amber-500">
+              <span className="size-1.5 rounded-full bg-amber-500" /> Unsaved changes
+            </span>
+          )}
+          {!isSaving && !saveError && !isDirty && activeFile && (
+            <span className="flex items-center gap-1 text-emerald-500">
+              <CheckIcon className="size-3" /> Saved
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Conflict Resolution Banner */}
+      {hasConflict && activeTabId && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangleIcon className="size-4 text-amber-500 shrink-0" />
+            <p className="text-xs text-amber-200">
+              <strong className="font-semibold">Conflict Detected:</strong> This file was modified externally (e.g., by the background AI agent). Your local changes have been preserved.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => resolveConflictAcceptRemote(activeTabId)}
+              className="px-2.5 py-1 text-xs font-medium rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors"
+            >
+              Accept external changes
+            </button>
+            <button
+              onClick={() => {
+                resolveConflictKeepLocal(activeTabId);
+                performSave(activeTabId);
+              }}
+              className="px-2.5 py-1 text-xs font-medium rounded bg-primary hover:bg-primary/90 text-primary-foreground flex items-center gap-1 transition-colors"
+            >
+              <SaveIcon className="size-3" /> Keep my changes & save
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 bg-background">
         {!activeFile && (
           <div className="size-full flex items-center justify-center">
@@ -43,16 +196,9 @@ export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
           <CodeEditor
             key={activeFile._id}
             fileName={activeFile.name}
-            initialValue={activeFile.content}
-            onChange={(content: string) => {
-              if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-              }
-
-              timeoutRef.current = setTimeout(() => {
-                updateFile({ id: activeFile._id, content });
-              }, DEBOUNCE_MS);
-            }}
+            initialValue={editorValue}
+            onChange={handleBufferChange}
+            onSave={handleManualSave}
           />
         )}
         {isActiveFileBinary && (

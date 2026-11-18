@@ -26,7 +26,6 @@ describe("Tool Handlers Tracking Wrapper", () => {
       return executed.result;
     }
 
-    const toolExecutionId = `${options.toolName}-mock123`;
     const iteration = context.getCurrentIteration();
 
     recordedEvents.push({
@@ -104,6 +103,7 @@ describe("Tool Handlers Tracking Wrapper", () => {
       }
     );
 
+    assert.ok(result);
     assert.equal(recordedEvents.length, 2);
     assert.deepEqual(recordedEvents[1].filePaths, ["src/index.ts", "src/utils.ts"]);
     assert.equal(recordedEvents[1].summary, "Read 2 files (src/index.ts, src/utils.ts)");
@@ -128,6 +128,7 @@ describe("Tool Handlers Tracking Wrapper", () => {
       }
     );
 
+    assert.ok(result);
     assert.equal(recordedEvents.length, 2);
     assert.deepEqual(recordedEvents[0].filePaths, [fileName]);
     assert.equal(recordedEvents[1].summary, `Updated ${fileName}`);
@@ -152,6 +153,7 @@ describe("Tool Handlers Tracking Wrapper", () => {
       }
     );
 
+    assert.ok(result);
     assert.equal(recordedEvents.length, 2);
     assert.deepEqual(recordedEvents[1].filePaths, fileNames);
     assert.equal(recordedEvents[1].summary, "Created 2 file(s): button.tsx, card.tsx");

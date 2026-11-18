@@ -9,8 +9,6 @@ describe("Cancellation Authorization and Scoping", () => {
     executionEvents: new Map(),
   };
 
-  const internalKey = "test_internal_key";
-
   beforeEach(() => {
     mockDb = {
       projects: new Map(),
@@ -119,7 +117,7 @@ describe("Cancellation Authorization and Scoping", () => {
       conversationId,
       projectId,
       role: "assistant",
-      content: "",
+      content: message,
       status: "processing",
     });
 
