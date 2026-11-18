@@ -135,6 +135,8 @@ export const ConversationSidebar = ({
             <Button
               size="icon-xs"
               variant="highlight"
+              aria-label="Past conversations"
+              title="Past conversations"
               onClick={() => setPastConversationsOpen(true)}
             >
               <HistoryIcon className="size-3.5" />
@@ -142,6 +144,8 @@ export const ConversationSidebar = ({
             <Button
               size="icon-xs"
               variant="highlight"
+              aria-label="New conversation"
+              title="New conversation"
               onClick={handleCreateConversation}
             >
               <PlusIcon className="size-3.5" />
