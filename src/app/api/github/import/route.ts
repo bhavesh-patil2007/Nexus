@@ -11,7 +11,7 @@ const requestSchema = z.object({
   url: z.url(),
 });
 
-function parseGitHubUrl(url: string) {
+export function parseGitHubUrl(url: string) {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) {
     throw new Error("Invalid GitHub URL");
