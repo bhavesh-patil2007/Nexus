@@ -89,6 +89,8 @@ const Tab = ({
             closeTab(fileId);
           }
         }}
+        aria-label={`Close ${fileName}`}
+        title={`Close ${fileName}`}
         className={cn(
           "p-0.5 rounded-sm hover:bg-white/10 opacity-0 group-hover:opacity-100",
           isActive && "opacity-100"
