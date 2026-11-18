@@ -88,6 +88,15 @@ export async function POST(request: Request) {
           messageId: msg._id,
           status: "cancelled",
         });
+
+        await convex.mutation(api.system.recordExecutionEnd, {
+          internalKey,
+          conversationId: msg.conversationId,
+          messageId: msg._id,
+          executionId: `exec-${msg._id}`,
+          status: "cancelled",
+          summary: "Request cancelled by user",
+        });
       }),
     );
   }

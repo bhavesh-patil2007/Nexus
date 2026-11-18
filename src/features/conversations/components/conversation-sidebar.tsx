@@ -31,11 +31,13 @@ import {
   useConversations,
   useCreateConversation,
   useMessages,
+  useExecutionEvents,
 } from "../hooks/use-conversations";
 
 import { Id } from "../../../../convex/_generated/dataModel";
 import { DEFAULT_CONVERSATION_TITLE } from "../constants";
 import { PastConversationsDialog } from "./past-conversations-dialog";
+import { ExecutionActivityTimeline } from "./execution-activity-timeline";
 
 interface ConversationSidebarProps {
   projectId: Id<"projects">;
@@ -58,6 +60,7 @@ export const ConversationSidebar = ({
 
   const activeConversation = useConversation(activeConversationId);
   const conversationMessages = useMessages(activeConversationId);
+  const executionEvents = useExecutionEvents(activeConversationId);
 
   const isProcessing = conversationMessages?.some(
     (msg) => msg.status === "processing",
@@ -147,38 +150,62 @@ export const ConversationSidebar = ({
         </div>
         <Conversation className="flex-1">
           <ConversationContent>
-            {conversationMessages?.map((message, messageIndex) => (
-              <Message key={message._id} from={message.role}>
-                <MessageContent>
-                  {message.status === "processing" ? (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <LoaderIcon className="size-4 animate-spin" />
-                      <span>Thinking...</span>
-                    </div>
-                  ) : message.status === "cancelled" ? (
-                    <span className="text-muted-foreground italic">
-                      Request cancelled
-                    </span>
-                  ) : (
-                    <MessageResponse>{message.content}</MessageResponse>
-                  )}
-                </MessageContent>
-                {message.role === "assistant" &&
-                  message.status === "completed" &&
-                  messageIndex === (conversationMessages?.length ?? 0) - 1 && (
-                    <MessageActions>
-                      <MessageAction
-                        onClick={() => {
-                          navigator.clipboard.writeText(message.content);
-                        }}
-                        label="Copy"
-                      >
-                        <CopyIcon className="size-3" />
-                      </MessageAction>
-                    </MessageActions>
-                  )}
-              </Message>
-            ))}
+            {conversationMessages?.map((message, messageIndex) => {
+              const messageEvents = (executionEvents ?? []).filter(
+                (evt) => evt.messageId === message._id,
+              );
+              const isMsgProcessing = message.status === "processing";
+
+              return (
+                <Message key={message._id} from={message.role}>
+                  <MessageContent>
+                    {message.role === "assistant" && messageEvents.length > 0 && (
+                      <ExecutionActivityTimeline
+                        events={messageEvents}
+                        isProcessing={isMsgProcessing}
+                      />
+                    )}
+
+                    {isMsgProcessing ? (
+                      message.content ? (
+                        <div className="space-y-2">
+                          <MessageResponse>{message.content}</MessageResponse>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground animate-pulse pt-1">
+                            <span className="size-1.5 rounded-full bg-primary" />
+                            <span>Generating response...</span>
+                          </div>
+                        </div>
+                      ) : messageEvents.length === 0 ? (
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <LoaderIcon className="size-4 animate-spin" />
+                          <span>Thinking...</span>
+                        </div>
+                      ) : null
+                    ) : message.status === "cancelled" ? (
+                      <span className="text-muted-foreground italic">
+                        Request cancelled
+                      </span>
+                    ) : (
+                      <MessageResponse>{message.content}</MessageResponse>
+                    )}
+                  </MessageContent>
+                  {message.role === "assistant" &&
+                    message.status === "completed" &&
+                    messageIndex === (conversationMessages?.length ?? 0) - 1 && (
+                      <MessageActions>
+                        <MessageAction
+                          onClick={() => {
+                            navigator.clipboard.writeText(message.content);
+                          }}
+                          label="Copy"
+                        >
+                          <CopyIcon className="size-3" />
+                        </MessageAction>
+                      </MessageActions>
+                    )}
+                </Message>
+              );
+            })}
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>

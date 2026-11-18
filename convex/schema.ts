@@ -104,4 +104,39 @@ export default defineSchema({
   })
     .index("by_conversation", ["conversationId"])
     .index("by_project_status", ["projectId", "status"]),
+
+  executionEvents: defineTable({
+    conversationId: v.id("conversations"),
+    projectId: v.id("projects"),
+    messageId: v.id("messages"),
+    executionId: v.string(), // Unique execution run id
+    iteration: v.number(),
+    eventType: v.union(
+      v.literal("tool_start"),
+      v.literal("tool_complete"),
+      v.literal("tool_fail"),
+      v.literal("execution_start"),
+      v.literal("execution_complete"),
+      v.literal("execution_cancel"),
+      v.literal("execution_fail"),
+    ),
+    toolExecutionId: v.optional(v.string()),
+    toolName: v.optional(v.string()),
+    description: v.optional(v.string()),
+    filePaths: v.optional(v.array(v.string())),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    summary: v.optional(v.string()),
+    error: v.optional(v.string()),
+  })
+    .index("by_message", ["messageId"])
+    .index("by_conversation", ["conversationId"])
+    .index("by_execution", ["executionId"])
+    .index("by_tool_execution", ["toolExecutionId"]),
 });

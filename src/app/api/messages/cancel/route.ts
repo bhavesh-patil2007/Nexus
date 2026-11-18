@@ -31,6 +31,7 @@ export async function POST(request: Request) {
     );
   }
 
+  // Authorize: verify project exists and is owned by authenticated user
   const project = await convex.query(api.system.getProjectById, {
     internalKey,
     projectId: projectId as Id<"projects">,
@@ -75,6 +76,15 @@ export async function POST(request: Request) {
         internalKey,
         messageId: msg._id,
         status: "cancelled",
+      });
+
+      await convex.mutation(api.system.recordExecutionEnd, {
+        internalKey,
+        conversationId: msg.conversationId,
+        messageId: msg._id,
+        executionId: `exec-${msg._id}`,
+        status: "cancelled",
+        summary: "Request cancelled by user",
       });
 
       return msg._id;

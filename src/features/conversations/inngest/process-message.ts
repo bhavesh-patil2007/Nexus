@@ -18,6 +18,7 @@ import { createCreateFolderTool } from './tools/create-folder';
 import { createRenameFileTool } from './tools/rename-file';
 import { createDeleteFilesTool } from './tools/delete-files';
 import { createScrapeUrlsTool } from './tools/scrape-urls';
+import { ToolExecutionContext } from './tools/types';
 
 interface MessageEvent {
   messageId: Id<"messages">;
@@ -36,7 +37,7 @@ export const processMessage = inngest.createFunction(
       },
     ],
     onFailure: async ({ event, step }) => {
-      const { messageId } = event.data.event.data as MessageEvent;
+      const { messageId, conversationId } = event.data.event.data as MessageEvent;
       const internalKey = process.env.NEXUS_CONVEX_INTERNAL_KEY;
 
       // Update the message with error content
@@ -47,6 +48,15 @@ export const processMessage = inngest.createFunction(
             messageId,
             content:
               "My apologies, I encountered an error while processing your request. Let me know if you need anything else!",
+          });
+
+          await convex.mutation(api.system.recordExecutionEnd, {
+            internalKey,
+            conversationId,
+            messageId,
+            executionId: `exec-${messageId}`,
+            status: "failed",
+            error: "Process message failure handler triggered",
           });
         });
       }
@@ -149,25 +159,64 @@ export const processMessage = inngest.createFunction(
       }
     }
 
-    // Create the coding agent with file tools
+    // Stable executionId derived from messageId so that function retries stay on the same execution
+    const executionId = `exec-${messageId}`;
+    let currentIteration = 0;
+    const toolCallCounters = new Map<string, number>();
+
+    const toolContext: ToolExecutionContext = {
+      executionId,
+      conversationId,
+      projectId,
+      messageId,
+      internalKey,
+      getCurrentIteration: () => currentIteration,
+      getNextToolCallIndex: (toolName: string) => {
+        const key = `iter${currentIteration}-${toolName}`;
+        const count = toolCallCounters.get(key) ?? 0;
+        toolCallCounters.set(key, count + 1);
+        return count;
+      },
+    };
+
+    // Record execution start
+    await step.run("record-execution-start", async () => {
+      await convex.mutation(api.system.recordExecutionStart, {
+        internalKey,
+        conversationId,
+        projectId,
+        messageId,
+        executionId,
+      });
+    });
+
+    // Create the coding agent with file tools and lifecycle tracking
     const codingAgent = createAgent({
       name: "nexus",
       description: "An expert AI coding assistant",
       system: systemPrompt,
-       model: openai({
+      model: openai({
         model: "gpt-4.1-mini",
-        defaultParameters: { temperature: 0.3 }
-       }),
-       tools: [
-        createListFilesTool({ internalKey, projectId }),
-        createReadFilesTool({ internalKey }),
-        createUpdateFileTool({ internalKey }),
-        createCreateFilesTool({ projectId, internalKey }),
+        defaultParameters: { temperature: 0.3 },
+      }),
+      lifecycle: {
+        onStart: async ({ network, prompt, history }) => {
+          if (network) {
+            currentIteration = network.state.results.length + 1;
+          }
+          return { prompt, history: history ?? [], stop: false };
+        },
+      },
+      tools: [
+        createListFilesTool({ internalKey, projectId, context: toolContext }),
+        createReadFilesTool({ internalKey, context: toolContext }),
+        createUpdateFileTool({ internalKey, context: toolContext }),
+        createCreateFilesTool({ projectId, internalKey, context: toolContext }),
         createCreateFolderTool({ projectId, internalKey }),
         createRenameFileTool({ internalKey }),
         createDeleteFilesTool({ internalKey }),
         createScrapeUrlsTool(),
-       ],
+      ],
     });
 
     // Create network with single agent
@@ -193,8 +242,32 @@ export const processMessage = inngest.createFunction(
       }
     });
 
-    // Run the agent
-    const result = await network.run(message);
+    // Track streamed text content
+    let streamedContent = "";
+
+    // Run the agent with streaming enabled
+    const result = await network.run(message, {
+      streaming: {
+        simulateChunking: true,
+        publish: async (evt) => {
+          if (evt.event === "text.delta") {
+            const delta = evt.data?.delta as string | undefined;
+            if (delta) {
+              streamedContent += delta;
+              try {
+                await convex.mutation(api.system.updateMessageStreamContent, {
+                  internalKey,
+                  messageId,
+                  content: streamedContent,
+                });
+              } catch (streamErr) {
+                console.warn("[Streaming] Failed to update stream chunk", streamErr);
+              }
+            }
+          }
+        },
+      },
+    });
 
     // Extract the assistant's text response from the last agent result
     const lastResult = result.state.results.at(-1);
@@ -203,22 +276,35 @@ export const processMessage = inngest.createFunction(
     );
 
     let assistantResponse =
+      streamedContent ||
       "I processed your request. Let me know if you need anything else!";
 
     if (textMessage?.type === "text") {
-      assistantResponse =
+      const parsedText =
         typeof textMessage.content === "string"
           ? textMessage.content
           : textMessage.content.map((c) => c.text).join("");
+      if (parsedText) {
+        assistantResponse = parsedText;
+      }
     }
 
-    // Update the assistant message with the response (this also sets status to completed)
+    // Update the assistant message with the final response (sets status to completed)
     await step.run("update-assistant-message", async () => {
       await convex.mutation(api.system.updateMessageContent, {
         internalKey,
         messageId,
         content: assistantResponse,
-      })
+      });
+
+      await convex.mutation(api.system.recordExecutionEnd, {
+        internalKey,
+        conversationId,
+        messageId,
+        executionId,
+        status: "completed",
+        summary: "Assistant execution completed successfully",
+      });
     });
 
     return { success: true, messageId, conversationId };
