@@ -79,6 +79,8 @@ export const FileExplorer = ({
               }}
               variant="highlight"
               size="icon-xs"
+              aria-label="New file"
+              title="New file"
             >
               <FilePlusCornerIcon className="size-3.5" />
             </Button>
@@ -91,6 +93,8 @@ export const FileExplorer = ({
               }}
               variant="highlight"
               size="icon-xs"
+              aria-label="New folder"
+              title="New folder"
             >
               <FolderPlusIcon className="size-3.5" />
             </Button>
@@ -102,6 +106,8 @@ export const FileExplorer = ({
               }}
               variant="highlight"
               size="icon-xs"
+              aria-label="Collapse all folders"
+              title="Collapse all folders"
             >
               <CopyMinusIcon className="size-3.5" />
             </Button>
