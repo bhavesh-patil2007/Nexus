@@ -1,0 +1,202 @@
+// @vitest-environment jsdom
+import { describe, expect, it, vi, afterEach } from "vitest";
+import React from "react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+
+// Mock child dialogs and list components to isolate keyboard shortcut routing
+let mockCommandDialogOpen = false;
+let mockImportDialogOpen = false;
+let mockNewProjectDialogOpen = false;
+
+vi.mock("@/features/projects/components/projects-command-dialog", () => ({
+  ProjectsCommandDialog: ({
+    open,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => {
+    mockCommandDialogOpen = open;
+    return open ? <div data-testid="dialog-command">Command Dialog</div> : null;
+  },
+}));
+
+vi.mock("@/features/projects/components/import-github-dialog", () => ({
+  ImportGithubDialog: ({
+    open,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => {
+    mockImportDialogOpen = open;
+    return open ? <div data-testid="dialog-import">Import Dialog</div> : null;
+  },
+}));
+
+vi.mock("@/features/projects/components/new-project-dialog", () => ({
+  NewProjectDialog: ({
+    open,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => {
+    mockNewProjectDialogOpen = open;
+    return open ? <div data-testid="dialog-new-project">New Project Dialog</div> : null;
+  },
+}));
+
+vi.mock("@/features/projects/components/projects-list", () => ({
+  ProjectsList: ({ onViewAll }: { onViewAll: () => void }) => (
+    <div data-testid="projects-list">
+      <button onClick={onViewAll}>View all</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/features/projects/hooks/use-projects", () => ({
+  useCreateProject: () => vi.fn(),
+}));
+
+vi.mock("next/font/google", () => ({
+  Poppins: () => ({ className: "mock-poppins" }),
+}));
+
+import { ProjectsView } from "@/features/projects/components/projects-view";
+
+describe("ProjectsView keyboard shortcuts", () => {
+  afterEach(() => {
+    cleanup();
+    mockCommandDialogOpen = false;
+    mockImportDialogOpen = false;
+    mockNewProjectDialogOpen = false;
+  });
+
+  it("Test 1 — opens Import GitHub Repository dialog on Ctrl+I", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "i",
+        ctrlKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockImportDialogOpen).toBe(true);
+    expect(mockCommandDialogOpen).toBe(false);
+    expect(screen.getByTestId("dialog-import")).toBeDefined();
+    expect(screen.queryByTestId("dialog-command")).toBeNull();
+  });
+
+  it("Test 2 — opens Import GitHub Repository dialog on Cmd+I (metaKey)", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "i",
+        metaKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockImportDialogOpen).toBe(true);
+    expect(mockCommandDialogOpen).toBe(false);
+    expect(screen.getByTestId("dialog-import")).toBeDefined();
+  });
+
+  it("Test 3 — opens Projects Command Dialog on Ctrl+K", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "k",
+        ctrlKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockCommandDialogOpen).toBe(true);
+    expect(mockImportDialogOpen).toBe(false);
+    expect(screen.getByTestId("dialog-command")).toBeDefined();
+  });
+
+  it("Test 4 — opens Projects Command Dialog on Cmd+K (metaKey)", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "k",
+        metaKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockCommandDialogOpen).toBe(true);
+    expect(screen.getByTestId("dialog-command")).toBeDefined();
+  });
+
+  it("Test 5 — opens New Project Dialog on Ctrl+J", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "j",
+        ctrlKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockNewProjectDialogOpen).toBe(true);
+    expect(mockImportDialogOpen).toBe(false);
+    expect(mockCommandDialogOpen).toBe(false);
+    expect(screen.getByTestId("dialog-new-project")).toBeDefined();
+  });
+
+  it("Test 6 — opens New Project Dialog on Cmd+J (metaKey)", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "j",
+        metaKey: true,
+      });
+    });
+
+    expect(defaultPrevented).toBe(true);
+    expect(mockNewProjectDialogOpen).toBe(true);
+    expect(screen.getByTestId("dialog-new-project")).toBeDefined();
+  });
+
+  it("Test 7 — does not trigger shortcuts or preventDefault without modifier keys", () => {
+    render(<ProjectsView />);
+
+    let defaultPrevented = false;
+    act(() => {
+      defaultPrevented = !fireEvent.keyDown(document, {
+        key: "i",
+        ctrlKey: false,
+        metaKey: false,
+      });
+    });
+
+    expect(defaultPrevented).toBe(false);
+    expect(mockImportDialogOpen).toBe(false);
+    expect(mockCommandDialogOpen).toBe(false);
+    expect(mockNewProjectDialogOpen).toBe(false);
+  });
+
+  it("Test 8 — listener cleanup on unmount removes event listener", () => {
+    const removeEventListenerSpy = vi.spyOn(document, "removeEventListener");
+    const { unmount } = render(<ProjectsView />);
+
+    unmount();
+
+    expect(removeEventListenerSpy).toHaveBeenCalledWith("keydown", expect.any(Function));
+    removeEventListenerSpy.mockRestore();
+  });
+});

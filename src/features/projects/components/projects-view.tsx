@@ -42,7 +42,7 @@ export const ProjectsView = () => {
         }
         if (e.key === "i") {
           e.preventDefault();
-          setCommandDialogOpen(true);
+          setImportDialogOpen(true);
         }
         if (e.key === "j") {
           e.preventDefault();
