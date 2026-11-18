@@ -24,7 +24,8 @@ const formSchema = z.object({
   envVariablesText: z.string(),
 });
 
-const parseEnvVariables = (text: string): Record<string, string> => {
+export const parseEnvVariables = (text?: string): Record<string, string> => {
+  if (!text) return {};
   const result: Record<string, string> = {};
   const lines = text.split("\n");
   for (const line of lines) {
@@ -42,7 +43,7 @@ const parseEnvVariables = (text: string): Record<string, string> => {
   return result;
 };
 
-const formatEnvVariables = (env?: Record<string, string>): string => {
+export const formatEnvVariables = (env?: Record<string, string>): string => {
   if (!env) return "";
   return Object.entries(env)
     .map(([k, v]) => `${k}=${v}`)
