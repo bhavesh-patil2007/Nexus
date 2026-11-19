@@ -56,12 +56,47 @@ export const useWebContainer = ({
 
   const containerRef = useRef<WebContainer | null>(null);
   const hasStartedRef = useRef(false);
+  const previousFilesMapRef = useRef<Map<string, string>>(new Map());
+  const currentProjectIdRef = useRef<Id<"projects">>(projectId);
 
   // References to active processes and streams
   const shellProcessRef = useRef<WebContainerProcess | null>(null);
   const shellInputWriterRef = useRef<WritableStreamDefaultWriter<string> | null>(null);
   const devProcessRef = useRef<WebContainerProcess | null>(null);
   const installProcessRef = useRef<WebContainerProcess | null>(null);
+
+  // Clean reset when switching projects
+  useEffect(() => {
+    if (currentProjectIdRef.current !== projectId) {
+      currentProjectIdRef.current = projectId;
+
+      if (shellInputWriterRef.current) {
+        shellInputWriterRef.current.releaseLock();
+        shellInputWriterRef.current = null;
+      }
+      if (shellProcessRef.current) {
+        shellProcessRef.current.kill();
+        shellProcessRef.current = null;
+      }
+      if (devProcessRef.current) {
+        devProcessRef.current.kill();
+        devProcessRef.current = null;
+      }
+      if (installProcessRef.current) {
+        installProcessRef.current.kill();
+        installProcessRef.current = null;
+      }
+
+      teardownWebContainer();
+      containerRef.current = null;
+      hasStartedRef.current = false;
+      previousFilesMapRef.current.clear();
+      setStatus("idle");
+      setPreviewUrl(null);
+      setError(null);
+      setTerminalOutput("");
+    }
+  }, [projectId]);
 
   // Terminal dimensions tracking
   const terminalDimensionsRef = useRef<{ cols: number; rows: number }>({
@@ -124,6 +159,16 @@ export const useWebContainer = ({
         const fileTree = buildFileTree(files);
         await container.mount(fileTree);
         if (!isMounted) return;
+
+        // Initialize snapshot of mounted files to prevent redundant re-syncs
+        const initialMap = new Map<string, string>();
+        const initialFilesMap = new Map(files.map((f) => [f._id, f]));
+        for (const file of files) {
+          if (file.type === "file" && !file.storageId && file.content !== undefined) {
+            initialMap.set(getFilePath(file, initialFilesMap), file.content);
+          }
+        }
+        previousFilesMapRef.current = initialMap;
 
         const unsubscribeServerReady = container.on("server-ready", (_port, url) => {
           if (!isMounted) return;
@@ -259,6 +304,7 @@ export const useWebContainer = ({
       }
     };
   }, [
+    projectId,
     enabled,
     files,
     restartKey,
@@ -268,19 +314,77 @@ export const useWebContainer = ({
     appendOutput,
   ]);
 
-  // Sync file changes (hot-reload)
+  // Sync file changes (hot-reload with diffing, mkdir, and deletion pruning)
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !files || status !== "running") return;
 
-    const filesMap = new Map(files.map((f) => [f._id, f]));
+    let isEffectActive = true;
 
-    for (const file of files) {
-      if (file.type !== "file" || file.storageId || !file.content) continue;
+    const syncFiles = async () => {
+      const filesMap = new Map(files.map((f) => [f._id, f]));
+      const currentPathsMap = new Map<string, string>();
 
-      const filePath = getFilePath(file, filesMap);
-      container.fs.writeFile(filePath, file.content);
-    }
+      for (const file of files) {
+        if (file.type !== "file" || file.storageId || file.content === undefined) continue;
+        const filePath = getFilePath(file, filesMap);
+        currentPathsMap.set(filePath, file.content);
+      }
+
+      // If initial snapshot was not set, set it and return
+      if (previousFilesMapRef.current.size === 0) {
+        previousFilesMapRef.current = currentPathsMap;
+        return;
+      }
+
+      const prevMap = previousFilesMapRef.current;
+
+      // 1. Prune files deleted from Convex
+      for (const [oldPath] of prevMap) {
+        if (!currentPathsMap.has(oldPath)) {
+          try {
+            await container.fs.rm(oldPath, { recursive: true });
+          } catch {
+            // File might have already been removed
+          }
+        }
+      }
+
+      // 2. Write new or modified files (ensuring directories exist)
+      for (const [filePath, content] of currentPathsMap) {
+        if (prevMap.get(filePath) !== content) {
+          const dir = filePath.includes("/")
+            ? filePath.substring(0, filePath.lastIndexOf("/"))
+            : null;
+
+          if (dir) {
+            try {
+              await container.fs.mkdir(dir, { recursive: true });
+            } catch {
+              // Ignore if directory already exists
+            }
+          }
+
+          try {
+            await container.fs.writeFile(filePath, content);
+          } catch (writeErr) {
+            console.error(`[WebContainer] Failed to sync ${filePath}:`, writeErr);
+          }
+        }
+      }
+
+      if (isEffectActive) {
+        previousFilesMapRef.current = currentPathsMap;
+      }
+    };
+
+    syncFiles().catch((err) => {
+      console.error("[WebContainer] File synchronization error:", err);
+    });
+
+    return () => {
+      isEffectActive = false;
+    };
   }, [files, status]);
 
   // Reset when disabled
@@ -303,6 +407,7 @@ export const useWebContainer = ({
         installProcessRef.current = null;
       }
       hasStartedRef.current = false;
+      previousFilesMapRef.current.clear();
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("idle");
       setPreviewUrl(null);
@@ -332,6 +437,7 @@ export const useWebContainer = ({
     teardownWebContainer();
     containerRef.current = null;
     hasStartedRef.current = false;
+    previousFilesMapRef.current.clear();
     setStatus("idle");
     setPreviewUrl(null);
     setError(null);

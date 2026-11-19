@@ -147,5 +147,61 @@ describe("file-tree utils", () => {
       const result = buildFileTree(files);
       expect(result).toEqual({});
     });
+
+    it("should preserve children when folder appears after its child files in the array (prevent clobbering)", () => {
+      // Child file appears FIRST in array, folder appears SECOND
+      const files: FileDoc[] = [
+        createMockFile({
+          _id: "f_child" as Id<"files">,
+          name: "button.tsx",
+          type: "file",
+          parentId: "folder_components" as Id<"files">,
+          content: "export const Button = () => null;",
+        }),
+        createMockFile({
+          _id: "folder_components" as Id<"files">,
+          name: "components",
+          type: "folder",
+          parentId: undefined,
+        }),
+      ];
+
+      const result = buildFileTree(files);
+
+      expect(result).toEqual({
+        components: {
+          directory: {
+            "button.tsx": {
+              file: {
+                contents: "export const Button = () => null;",
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it("should handle circular parentId references gracefully without infinite loops", () => {
+      const f1 = createMockFile({
+        _id: "loop_1" as Id<"files">,
+        name: "folder_a",
+        type: "folder",
+        parentId: "loop_2" as Id<"files">,
+      });
+      const f2 = createMockFile({
+        _id: "loop_2" as Id<"files">,
+        name: "folder_b",
+        type: "folder",
+        parentId: "loop_1" as Id<"files">,
+      });
+
+      const map = new Map<Id<"files">, FileDoc>([
+        [f1._id, f1],
+        [f2._id, f2],
+      ]);
+
+      expect(() => getFilePath(f1, map)).not.toThrow();
+      expect(() => buildFileTree([f1, f2])).not.toThrow();
+    });
   });
 });

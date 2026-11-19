@@ -14,13 +14,16 @@ export const buildFileTree = (files: FileDoc[]): FileSystemTree => {
   const getPath = (file: FileDoc): string[] => {
     const parts: string[] = [file.name];
     let parentId = file.parentId;
+    const visited = new Set<Id<"files">>([file._id]);
 
     while (parentId) {
+      if (visited.has(parentId)) break;
+      visited.add(parentId);
       const parent = filesMap.get(parentId);
       if (!parent) break;
       parts.unshift(parent.name);
       parentId = parent.parentId;
-    };
+    }
 
     return parts;
   };
@@ -35,12 +38,15 @@ export const buildFileTree = (files: FileDoc[]): FileSystemTree => {
 
       if (isLast) {
         if (file.type === "folder") {
-          current[part] = { directory: {} };
+          // Preserve any existing children if folder node is traversed after its children
+          if (!current[part] || !("directory" in current[part])) {
+            current[part] = { directory: {} };
+          }
         } else if (!file.storageId && file.content !== undefined) {
           current[part] = { file: { contents: file.content } };
         }
       } else {
-        if (!current[part]) {
+        if (!current[part] || !("directory" in current[part])) {
           current[part] = { directory: {} };
         }
         const node = current[part];
@@ -63,8 +69,11 @@ export const getFilePath = (
 ): string => {
   const parts: string[] = [file.name];
   let parentId = file.parentId;
+  const visited = new Set<Id<"files">>([file._id]);
 
   while (parentId) {
+    if (visited.has(parentId)) break;
+    visited.add(parentId);
     const parent = filesMap.get(parentId);
     if (!parent) break;
     parts.unshift(parent.name);
