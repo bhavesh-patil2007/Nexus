@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { ChevronRightIcon } from "lucide-react";
 import { FileIcon, FolderIcon } from "@react-symbols/icons/utils";
@@ -53,32 +54,44 @@ export const Tree = ({
     enabled: item.type === "folder" && isOpen,
   });
 
-  const handleRename = (newName: string) => {
+  const handleRename = async (newName: string) => {
     setIsRenaming(false);
 
     if (newName === item.name) {
       return;
     }
 
-    renameFile({ id: item._id, newName });
+    try {
+      await renameFile({ id: item._id, newName });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to rename item";
+      toast.error(message);
+    }
   };
 
-  const handleCreate = (name: string) => {
+  const handleCreate = async (name: string) => {
     setCreating(null);
 
-    if (creating === "file") {
-      createFile({
-        projectId,
-        name,
-        content: "",
-        parentId: item._id,
-      });
-    } else {
-      createFolder({
-        projectId,
-        name,
-        parentId: item._id,
-      });
+    try {
+      if (creating === "file") {
+        await createFile({
+          projectId,
+          name,
+          content: "",
+          parentId: item._id,
+        });
+      } else {
+        await createFolder({
+          projectId,
+          name,
+          parentId: item._id,
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to create item";
+      toast.error(message);
     }
   };
 
