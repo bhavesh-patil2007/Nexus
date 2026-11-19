@@ -10,7 +10,7 @@ import { Id } from "../../../../convex/_generated/dataModel";
 
 export const requestSchema = z.object({
   conversationId: z.string(),
-  message: z.string(),
+  message: z.string().trim().min(1, "Message cannot be empty"),
 });
 
 export async function POST(request: Request) {
@@ -30,7 +30,16 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { conversationId, message } = requestSchema.parse(body);
+  const parsedBody = requestSchema.safeParse(body);
+
+  if (!parsedBody.success) {
+    return NextResponse.json(
+      { error: "Invalid request body" },
+      { status: 400 },
+    );
+  }
+
+  const { conversationId, message } = parsedBody.data;
 
   const conversation = await convex.query(api.system.getConversationById, {
     internalKey,

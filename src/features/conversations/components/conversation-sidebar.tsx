@@ -91,8 +91,17 @@ export const ConversationSidebar = ({
   };
 
   const handleSubmit = async (message: PromptInputMessage) => {
-    if (isProcessing && !message.text) {
+    const trimmedMessage = message.text.trim();
+
+    // Preserve the existing stop/cancel behavior while processing.
+    if (isProcessing && !trimmedMessage) {
       await handleCancel();
+      setInput("");
+      return;
+    }
+
+    // Defensive guard against whitespace-only submissions.
+    if (!trimmedMessage) {
       setInput("");
       return;
     }
@@ -108,7 +117,7 @@ export const ConversationSidebar = ({
       await ky.post("/api/messages", {
         json: {
           conversationId,
-          message: message.text,
+          message: trimmedMessage,
         },
       });
     } catch {
@@ -226,7 +235,7 @@ export const ConversationSidebar = ({
             <PromptInputFooter>
               <PromptInputTools />
               <PromptInputSubmit
-                disabled={isProcessing ? false : !input}
+                disabled={isProcessing ? false : !input.trim()}
                 status={isProcessing ? "streaming" : undefined}
               />
             </PromptInputFooter>
