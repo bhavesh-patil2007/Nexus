@@ -15,8 +15,8 @@ import { convex } from "@/lib/convex-client";
 
 import { api } from "../../../../../convex/_generated/api";
 
-const requestSchema = z.object({
-  prompt: z.string().min(1),
+export const requestSchema = z.object({
+  prompt: z.string().trim().min(1, "Prompt cannot be empty"),
 });
 
 export async function POST(request: Request) {
@@ -36,7 +36,16 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { prompt } = requestSchema.parse(body);
+  const parsedBody = requestSchema.safeParse(body);
+
+  if (!parsedBody.success) {
+    return NextResponse.json(
+      { error: "Invalid request body" },
+      { status: 400 },
+    );
+  }
+
+  const { prompt } = parsedBody.data;
 
   const projectName = uniqueNamesGenerator({
     dictionaries: [adjectives, animals, colors],

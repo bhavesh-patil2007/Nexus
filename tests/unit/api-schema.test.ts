@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { requestSchema as githubExportSchema } from "@/app/api/github/export/route";
 import { requestSchema as cancelMessageSchema } from "@/app/api/messages/cancel/route";
 import { requestSchema as messageSchema } from "@/app/api/messages/route";
+import { requestSchema as projectPromptSchema } from "@/app/api/projects/create-with-prompt/route";
 
 describe("API request validation schemas", () => {
   describe("/api/messages requestSchema", () => {
@@ -25,6 +26,46 @@ describe("API request validation schemas", () => {
       expect(
         messageSchema.safeParse({ conversationId: 123, message: "test" }).success
       ).toBe(false);
+    });
+
+    it("should trim messages and reject whitespace-only content", () => {
+      const result = messageSchema.safeParse({
+        conversationId: "conv_123",
+        message: "  Hello assistant  ",
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.message).toBe("Hello assistant");
+      }
+
+      expect(
+        messageSchema.safeParse({
+          conversationId: "conv_123",
+          message: "  \t\n  ",
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe("/api/projects/create-with-prompt requestSchema", () => {
+    it("should accept and trim a valid project prompt", () => {
+      const result = projectPromptSchema.safeParse({
+        prompt: "  Build a dashboard  ",
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.prompt).toBe("Build a dashboard");
+      }
+    });
+
+    it("should reject whitespace-only, missing, or non-string prompts", () => {
+      expect(projectPromptSchema.safeParse({ prompt: "   \t\n " }).success).toBe(
+        false,
+      );
+      expect(projectPromptSchema.safeParse({}).success).toBe(false);
+      expect(projectPromptSchema.safeParse({ prompt: 123 }).success).toBe(false);
     });
   });
 

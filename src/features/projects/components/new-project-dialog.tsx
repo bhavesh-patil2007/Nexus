@@ -39,14 +39,22 @@ export const NewProjectDialog = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (message: PromptInputMessage) => {
-    if (!message.text) return;
+    const trimmedPrompt = message.text.trim();
+
+    // Prevent empty or whitespace-only project prompts.
+    if (!trimmedPrompt) {
+      setInput("");
+      return;
+    }
+
+    if (isSubmitting) return;
 
     setIsSubmitting(true);
 
     try {
       const { projectId } = await ky
         .post("/api/projects/create-with-prompt", {
-          json: { prompt: message.text.trim() },
+          json: { prompt: trimmedPrompt },
         })
         .json<{ projectId: Id<"projects"> }>();
 
@@ -84,7 +92,7 @@ export const NewProjectDialog = ({
           </PromptInputBody>
           <PromptInputFooter>
              <PromptInputTools />
-             <PromptInputSubmit disabled={!input || isSubmitting} />
+             <PromptInputSubmit disabled={!input.trim() || isSubmitting} />
           </PromptInputFooter>
         </PromptInput>
       </DialogContent>
