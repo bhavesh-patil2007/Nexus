@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { toast } from "sonner"
 import { ChevronRightIcon, CopyMinusIcon, FilePlusCornerIcon, FolderPlusIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -33,22 +34,28 @@ export const FileExplorer = ({
 
   const createFile = useCreateFile();
   const createFolder = useCreateFolder();
-  const handleCreate = (name: string) => {
+  const handleCreate = async (name: string) => {
     setCreating(null);
 
-    if (creating === "file") {
-      createFile({
-        projectId,
-        name,
-        content: "",
-        parentId: undefined,
-      });
-    } else {
-      createFolder({
-        projectId,
-        name,
-        parentId: undefined,
-      });
+    try {
+      if (creating === "file") {
+        await createFile({
+          projectId,
+          name,
+          content: "",
+          parentId: undefined,
+        });
+      } else {
+        await createFolder({
+          projectId,
+          name,
+          parentId: undefined,
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to create item";
+      toast.error(message);
     }
   };
 

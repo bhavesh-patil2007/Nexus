@@ -276,10 +276,10 @@ export const createFile = mutation({
       .collect();
 
     const existing = files.find(
-      (file) => file.name === args.name && file.type === "file",
+      (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("File already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const fileId = await ctx.db.insert("files", {
       projectId: args.projectId,
@@ -321,14 +321,14 @@ export const createFiles = mutation({
 
     for (const file of args.files) {
       const existing = existingFiles.find(
-        (f) => f.name === file.name && f.type === "file",
+        (f) => f.name === file.name,
       );
 
       if (existing) {
         results.push({
           name: file.name,
           fileId: existing._id,
-          error: "File already exists",
+          error: "An item with this name already exists in this location",
         });
         continue;
       }
@@ -368,11 +368,11 @@ export const createFolder = mutation({
       .collect();
 
     const existing = files.find(
-      (file) => file.name === args.name && file.type === "folder",
+      (file) => file.name === args.name,
     );
 
     if (existing) {
-      throw new Error("Folder already exists");
+      throw new Error("An item with this name already exists in this location");
     }
 
     const fileId = await ctx.db.insert("files", {
@@ -412,12 +412,11 @@ export const renameFile = mutation({
     const existing = siblings.find(
       (sibling) =>
         sibling.name === args.newName &&
-        sibling.type === file.type &&
         sibling._id !== args.fileId,
     );
 
     if (existing) {
-      throw new Error(`A ${file.type} named "${args.newName}" already exists`);
+      throw new Error("An item with this name already exists in this location");
     }
 
     await ctx.db.patch(args.fileId, {
@@ -529,10 +528,10 @@ export const createBinaryFile = mutation({
       .collect();
 
     const existing = files.find(
-      (file) => file.name === args.name && file.type === "file",
+      (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("File already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const fileId = await ctx.db.insert("files", {
       projectId: args.projectId,

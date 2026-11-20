@@ -132,10 +132,10 @@ export const createFile = mutation({
       .collect();
 
     const existing = files.find(
-      (file) => file.name === args.name && file.type === "file",
+      (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("File already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const now = Date.now();
 
@@ -178,10 +178,10 @@ export const createFolder = mutation({
       .collect();
 
     const existing = files.find(
-      (file) => file.name === args.name && file.type === "folder",
+      (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("Folder already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const now = Date.now();
 
@@ -228,13 +228,12 @@ export const renameFile = mutation({
     const existing = siblings.find(
       (sibling) =>
         sibling.name === args.newName &&
-        sibling.type === file.type &&
         sibling._id !== args.id,
     );
 
     if (existing)
       throw new Error(
-        `A ${file.type} with this name already exists in this location`,
+        "An item with this name already exists in this location",
       );
 
     const now = Date.now();
