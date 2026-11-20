@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WebContainer, WebContainerProcess } from "@webcontainer/api";
 
-import { buildFileTree, getFilePath } from "@/features/preview/utils/file-tree";
+import {
+  buildFileTree,
+  extractFileTreeSnapshot,
+  computeFileTreeDiff,
+  FileTreeSnapshot,
+} from "@/features/preview/utils/file-tree";
 import { useFiles } from "@/features/projects/hooks/use-files";
 
 import { Id } from "../../../../convex/_generated/dataModel";
@@ -56,7 +61,11 @@ export const useWebContainer = ({
 
   const containerRef = useRef<WebContainer | null>(null);
   const hasStartedRef = useRef(false);
-  const previousFilesMapRef = useRef<Map<string, string>>(new Map());
+  const previousSnapshotRef = useRef<FileTreeSnapshot>({
+    files: new Map(),
+    directories: new Set(),
+  });
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const currentProjectIdRef = useRef<Id<"projects">>(projectId);
 
   // References to active processes and streams
@@ -90,7 +99,8 @@ export const useWebContainer = ({
       teardownWebContainer();
       containerRef.current = null;
       hasStartedRef.current = false;
-      previousFilesMapRef.current.clear();
+      previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+      syncQueueRef.current = Promise.resolve();
       setStatus("idle");
       setPreviewUrl(null);
       setError(null);
@@ -160,15 +170,8 @@ export const useWebContainer = ({
         await container.mount(fileTree);
         if (!isMounted) return;
 
-        // Initialize snapshot of mounted files to prevent redundant re-syncs
-        const initialMap = new Map<string, string>();
-        const initialFilesMap = new Map(files.map((f) => [f._id, f]));
-        for (const file of files) {
-          if (file.type === "file" && !file.storageId && file.content !== undefined) {
-            initialMap.set(getFilePath(file, initialFilesMap), file.content);
-          }
-        }
-        previousFilesMapRef.current = initialMap;
+        // Initialize snapshot of mounted files and directories to prevent redundant re-syncs
+        previousSnapshotRef.current = extractFileTreeSnapshot(files);
 
         const unsubscribeServerReady = container.on("server-ready", (_port, url) => {
           if (!isMounted) return;
@@ -314,45 +317,61 @@ export const useWebContainer = ({
     appendOutput,
   ]);
 
-  // Sync file changes (hot-reload with diffing, mkdir, and deletion pruning)
+  // Sync file changes (hot-reload with sequential queue diffing, mkdir, and folder pruning)
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !files || status !== "running") return;
 
     let isEffectActive = true;
 
-    const syncFiles = async () => {
-      const filesMap = new Map(files.map((f) => [f._id, f]));
-      const currentPathsMap = new Map<string, string>();
+    // Chain sync task onto sequential promise queue to guard against concurrent interleaving
+    syncQueueRef.current = syncQueueRef.current
+      .then(async () => {
+        if (!isEffectActive || containerRef.current !== container) return;
 
-      for (const file of files) {
-        if (file.type !== "file" || file.storageId || file.content === undefined) continue;
-        const filePath = getFilePath(file, filesMap);
-        currentPathsMap.set(filePath, file.content);
-      }
+        const currentSnapshot = extractFileTreeSnapshot(files);
+        const prevSnapshot = previousSnapshotRef.current;
 
-      // If initial snapshot was not set, set it and return
-      if (previousFilesMapRef.current.size === 0) {
-        previousFilesMapRef.current = currentPathsMap;
-        return;
-      }
+        // If initial snapshot was not set, set it and return
+        if (
+          prevSnapshot.files.size === 0 &&
+          prevSnapshot.directories.size === 0
+        ) {
+          previousSnapshotRef.current = currentSnapshot;
+          return;
+        }
 
-      const prevMap = previousFilesMapRef.current;
+        const diff = computeFileTreeDiff(prevSnapshot, currentSnapshot);
 
-      // 1. Prune files deleted from Convex
-      for (const [oldPath] of prevMap) {
-        if (!currentPathsMap.has(oldPath)) {
+        // 1. Create newly added directories (e.g. empty folders or folders for new files)
+        for (const dir of diff.directoriesToCreate) {
+          try {
+            await container.fs.mkdir(dir, { recursive: true });
+          } catch {
+            // Ignore if directory already exists
+          }
+        }
+
+        // 2. Prune files deleted from Convex
+        for (const oldPath of diff.filesToDelete) {
           try {
             await container.fs.rm(oldPath, { recursive: true });
           } catch {
-            // File might have already been removed
+            // Ignore if file was already removed
           }
         }
-      }
 
-      // 2. Write new or modified files (ensuring directories exist)
-      for (const [filePath, content] of currentPathsMap) {
-        if (prevMap.get(filePath) !== content) {
+        // 3. Prune deleted directories (deepest first to cleanly remove nested empty folders)
+        for (const dirPath of diff.directoriesToDelete) {
+          try {
+            await container.fs.rm(dirPath, { recursive: true });
+          } catch {
+            // Ignore if directory was already removed
+          }
+        }
+
+        // 4. Write new or modified files (ensuring directories exist)
+        for (const { path: filePath, content } of diff.filesToWrite) {
           const dir = filePath.includes("/")
             ? filePath.substring(0, filePath.lastIndexOf("/"))
             : null;
@@ -371,16 +390,14 @@ export const useWebContainer = ({
             console.error(`[WebContainer] Failed to sync ${filePath}:`, writeErr);
           }
         }
-      }
 
-      if (isEffectActive) {
-        previousFilesMapRef.current = currentPathsMap;
-      }
-    };
-
-    syncFiles().catch((err) => {
-      console.error("[WebContainer] File synchronization error:", err);
-    });
+        if (isEffectActive) {
+          previousSnapshotRef.current = currentSnapshot;
+        }
+      })
+      .catch((err) => {
+        console.error("[WebContainer] File synchronization error:", err);
+      });
 
     return () => {
       isEffectActive = false;
@@ -407,7 +424,8 @@ export const useWebContainer = ({
         installProcessRef.current = null;
       }
       hasStartedRef.current = false;
-      previousFilesMapRef.current.clear();
+      previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+      syncQueueRef.current = Promise.resolve();
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("idle");
       setPreviewUrl(null);
@@ -437,7 +455,8 @@ export const useWebContainer = ({
     teardownWebContainer();
     containerRef.current = null;
     hasStartedRef.current = false;
-    previousFilesMapRef.current.clear();
+    previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+    syncQueueRef.current = Promise.resolve();
     setStatus("idle");
     setPreviewUrl(null);
     setError(null);

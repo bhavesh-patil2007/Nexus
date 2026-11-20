@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { Doc, Id } from "@/../convex/_generated/dataModel";
-import { buildFileTree, getFilePath } from "@/features/preview/utils/file-tree";
+import {
+  buildFileTree,
+  getFilePath,
+  extractFileTreeSnapshot,
+  computeFileTreeDiff,
+} from "@/features/preview/utils/file-tree";
 
 type FileDoc = Doc<"files">;
 
@@ -202,6 +207,87 @@ describe("file-tree utils", () => {
 
       expect(() => getFilePath(f1, map)).not.toThrow();
       expect(() => buildFileTree([f1, f2])).not.toThrow();
+    });
+  });
+
+  describe("File Tree Diffing and Directory Pruning", () => {
+    it("should detect deleted files and empty folders to prune", () => {
+      const srcFolder = createMockFile({
+        _id: "folder_src" as Id<"files">,
+        name: "src",
+        type: "folder",
+      });
+      const componentsFolder = createMockFile({
+        _id: "folder_components" as Id<"files">,
+        name: "components",
+        type: "folder",
+        parentId: "folder_src" as Id<"files">,
+      });
+      const buttonFile = createMockFile({
+        _id: "file_button" as Id<"files">,
+        name: "button.tsx",
+        type: "file",
+        parentId: "folder_components" as Id<"files">,
+        content: "export const Button = () => null;",
+      });
+      const emptyFolder = createMockFile({
+        _id: "folder_empty" as Id<"files">,
+        name: "empty_dir",
+        type: "folder",
+      });
+
+      // Previous snapshot: src/components/button.tsx and empty_dir
+      const prevSnapshot = extractFileTreeSnapshot([
+        srcFolder,
+        componentsFolder,
+        buttonFile,
+        emptyFolder,
+      ]);
+
+      expect(prevSnapshot.directories).toContain("src");
+      expect(prevSnapshot.directories).toContain("src/components");
+      expect(prevSnapshot.directories).toContain("empty_dir");
+      expect(prevSnapshot.files.get("src/components/button.tsx")).toBe(
+        "export const Button = () => null;"
+      );
+
+      // Current snapshot: button.tsx and empty_dir deleted; components folder deleted
+      const currentSnapshot = extractFileTreeSnapshot([srcFolder]);
+
+      const diff = computeFileTreeDiff(prevSnapshot, currentSnapshot);
+
+      expect(diff.filesToDelete).toEqual(["src/components/button.tsx"]);
+      expect(diff.directoriesToDelete).toContain("empty_dir");
+      expect(diff.directoriesToDelete).toContain("src/components");
+      expect(diff.directoriesToDelete).not.toContain("src");
+      // Deepest directories should be deleted first
+      expect(diff.directoriesToDelete.indexOf("src/components")).toBeLessThan(
+        diff.directoriesToDelete.indexOf("empty_dir") === -1
+          ? 999
+          : diff.directoriesToDelete.length
+      );
+    });
+
+    it("should detect newly created directories and modified files", () => {
+      const prevSnapshot = {
+        files: new Map([["index.ts", "console.log(1);"]]),
+        directories: new Set<string>(),
+      };
+
+      const currentSnapshot = {
+        files: new Map([["index.ts", "console.log(2);"], ["src/utils/math.ts", "export const add = () => {};"]]),
+        directories: new Set(["src", "src/utils"]),
+      };
+
+      const diff = computeFileTreeDiff(prevSnapshot, currentSnapshot);
+
+      expect(diff.filesToWrite).toEqual([
+        { path: "index.ts", content: "console.log(2);" },
+        { path: "src/utils/math.ts", content: "export const add = () => {};" },
+      ]);
+      expect(diff.directoriesToCreate).toEqual(["src", "src/utils"]);
+      expect(diff.filesToDelete).toEqual([]);
+      expect(diff.directoriesToDelete).toEqual([]);
     });
   });
 });
