@@ -279,7 +279,7 @@ export const createFile = mutation({
       (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("An item with this name already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const fileId = await ctx.db.insert("files", {
       projectId: args.projectId,
@@ -328,7 +328,7 @@ export const createFiles = mutation({
         results.push({
           name: file.name,
           fileId: existing._id,
-          error: "An item with this name already exists",
+          error: "An item with this name already exists in this location",
         });
         continue;
       }
@@ -372,7 +372,7 @@ export const createFolder = mutation({
     );
 
     if (existing) {
-      throw new Error("An item with this name already exists");
+      throw new Error("An item with this name already exists in this location");
     }
 
     const fileId = await ctx.db.insert("files", {
@@ -416,7 +416,7 @@ export const renameFile = mutation({
     );
 
     if (existing) {
-      throw new Error(`An item named "${args.newName}" already exists`);
+      throw new Error("An item with this name already exists in this location");
     }
 
     await ctx.db.patch(args.fileId, {
@@ -531,7 +531,7 @@ export const createBinaryFile = mutation({
       (file) => file.name === args.name,
     );
 
-    if (existing) throw new Error("An item with this name already exists");
+    if (existing) throw new Error("An item with this name already exists in this location");
 
     const fileId = await ctx.db.insert("files", {
       projectId: args.projectId,
