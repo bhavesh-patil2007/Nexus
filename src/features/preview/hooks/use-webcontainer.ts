@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WebContainer, WebContainerProcess } from "@webcontainer/api";
 
-import { buildFileTree, getFilePath } from "@/features/preview/utils/file-tree";
+import {
+  buildFileTree,
+  extractFileTreeSnapshot,
+  computeFileTreeDiff,
+  FileTreeSnapshot,
+} from "@/features/preview/utils/file-tree";
 import { useFiles } from "@/features/projects/hooks/use-files";
 
 import { Id } from "../../../../convex/_generated/dataModel";
@@ -56,12 +61,52 @@ export const useWebContainer = ({
 
   const containerRef = useRef<WebContainer | null>(null);
   const hasStartedRef = useRef(false);
+  const previousSnapshotRef = useRef<FileTreeSnapshot>({
+    files: new Map(),
+    directories: new Set(),
+  });
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const currentProjectIdRef = useRef<Id<"projects">>(projectId);
 
   // References to active processes and streams
   const shellProcessRef = useRef<WebContainerProcess | null>(null);
   const shellInputWriterRef = useRef<WritableStreamDefaultWriter<string> | null>(null);
   const devProcessRef = useRef<WebContainerProcess | null>(null);
   const installProcessRef = useRef<WebContainerProcess | null>(null);
+
+  // Clean reset when switching projects
+  useEffect(() => {
+    if (currentProjectIdRef.current !== projectId) {
+      currentProjectIdRef.current = projectId;
+
+      if (shellInputWriterRef.current) {
+        shellInputWriterRef.current.releaseLock();
+        shellInputWriterRef.current = null;
+      }
+      if (shellProcessRef.current) {
+        shellProcessRef.current.kill();
+        shellProcessRef.current = null;
+      }
+      if (devProcessRef.current) {
+        devProcessRef.current.kill();
+        devProcessRef.current = null;
+      }
+      if (installProcessRef.current) {
+        installProcessRef.current.kill();
+        installProcessRef.current = null;
+      }
+
+      teardownWebContainer();
+      containerRef.current = null;
+      hasStartedRef.current = false;
+      previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+      syncQueueRef.current = Promise.resolve();
+      setStatus("idle");
+      setPreviewUrl(null);
+      setError(null);
+      setTerminalOutput("");
+    }
+  }, [projectId]);
 
   // Terminal dimensions tracking
   const terminalDimensionsRef = useRef<{ cols: number; rows: number }>({
@@ -124,6 +169,9 @@ export const useWebContainer = ({
         const fileTree = buildFileTree(files);
         await container.mount(fileTree);
         if (!isMounted) return;
+
+        // Initialize snapshot of mounted files and directories to prevent redundant re-syncs
+        previousSnapshotRef.current = extractFileTreeSnapshot(files);
 
         const unsubscribeServerReady = container.on("server-ready", (_port, url) => {
           if (!isMounted) return;
@@ -259,6 +307,7 @@ export const useWebContainer = ({
       }
     };
   }, [
+    projectId,
     enabled,
     files,
     restartKey,
@@ -268,19 +317,91 @@ export const useWebContainer = ({
     appendOutput,
   ]);
 
-  // Sync file changes (hot-reload)
+  // Sync file changes (hot-reload with sequential queue diffing, mkdir, and folder pruning)
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !files || status !== "running") return;
 
-    const filesMap = new Map(files.map((f) => [f._id, f]));
+    let isEffectActive = true;
 
-    for (const file of files) {
-      if (file.type !== "file" || file.storageId || !file.content) continue;
+    // Chain sync task onto sequential promise queue to guard against concurrent interleaving
+    syncQueueRef.current = syncQueueRef.current
+      .then(async () => {
+        if (!isEffectActive || containerRef.current !== container) return;
 
-      const filePath = getFilePath(file, filesMap);
-      container.fs.writeFile(filePath, file.content);
-    }
+        const currentSnapshot = extractFileTreeSnapshot(files);
+        const prevSnapshot = previousSnapshotRef.current;
+
+        // If initial snapshot was not set, set it and return
+        if (
+          prevSnapshot.files.size === 0 &&
+          prevSnapshot.directories.size === 0
+        ) {
+          previousSnapshotRef.current = currentSnapshot;
+          return;
+        }
+
+        const diff = computeFileTreeDiff(prevSnapshot, currentSnapshot);
+
+        // 1. Create newly added directories (e.g. empty folders or folders for new files)
+        for (const dir of diff.directoriesToCreate) {
+          try {
+            await container.fs.mkdir(dir, { recursive: true });
+          } catch {
+            // Ignore if directory already exists
+          }
+        }
+
+        // 2. Prune files deleted from Convex
+        for (const oldPath of diff.filesToDelete) {
+          try {
+            await container.fs.rm(oldPath, { recursive: true });
+          } catch {
+            // Ignore if file was already removed
+          }
+        }
+
+        // 3. Prune deleted directories (deepest first to cleanly remove nested empty folders)
+        for (const dirPath of diff.directoriesToDelete) {
+          try {
+            await container.fs.rm(dirPath, { recursive: true });
+          } catch {
+            // Ignore if directory was already removed
+          }
+        }
+
+        // 4. Write new or modified files (ensuring directories exist)
+        for (const { path: filePath, content } of diff.filesToWrite) {
+          const dir = filePath.includes("/")
+            ? filePath.substring(0, filePath.lastIndexOf("/"))
+            : null;
+
+          if (dir) {
+            try {
+              await container.fs.mkdir(dir, { recursive: true });
+            } catch {
+              // Ignore if directory already exists
+            }
+          }
+
+          try {
+            await container.fs.writeFile(filePath, content);
+          } catch (writeErr) {
+            console.error(`[WebContainer] Failed to sync ${filePath}:`, writeErr);
+          }
+        }
+
+        if (isEffectActive) {
+          previousSnapshotRef.current = currentSnapshot;
+        }
+      })
+      .catch((err) => {
+        console.error("[WebContainer] File synchronization error:", err);
+      });
+
+    return () => {
+      isEffectActive = false;
+    };
   }, [files, status]);
 
   // Reset when disabled
@@ -303,6 +424,8 @@ export const useWebContainer = ({
         installProcessRef.current = null;
       }
       hasStartedRef.current = false;
+      previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+      syncQueueRef.current = Promise.resolve();
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("idle");
       setPreviewUrl(null);
@@ -332,6 +455,8 @@ export const useWebContainer = ({
     teardownWebContainer();
     containerRef.current = null;
     hasStartedRef.current = false;
+    previousSnapshotRef.current = { files: new Map(), directories: new Set() };
+    syncQueueRef.current = Promise.resolve();
     setStatus("idle");
     setPreviewUrl(null);
     setError(null);
