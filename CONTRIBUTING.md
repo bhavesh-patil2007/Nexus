@@ -126,6 +126,13 @@ Security is critical to Nexus:
 
 ---
 
+## 🎯 Issue Assignment Policy
+
+- **One Issue at a Time:** Each contributor can have only **one issue assigned to them at a time**.
+- Contributors must complete their currently assigned issue and get it reviewed or closed before requesting assignment of another issue.
+- This ensures fair distribution of work and gives everyone an opportunity to contribute.
+- Do not work on multiple assigned issues simultaneously without prior approval from a maintainer.
+
 ## 📜 Code of Conduct
 
 All contributors are expected to uphold our [Code of Conduct](CODE_OF_CONDUCT.md). Be respectful, collaborative, and constructive.
