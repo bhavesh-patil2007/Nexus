@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 
 import { useFile } from "@/features/projects/hooks/use-files";
@@ -8,7 +8,18 @@ import { Id } from "../../../../convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 import { FileIcon } from "@react-symbols/icons/utils";
-import { XIcon } from "lucide-react";
+import { XIcon, XCircleIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const Tab = ({
   fileId,
@@ -117,8 +128,22 @@ export const TopNavigation = ({
 }: { 
   projectId: Id<"projects">
 }) => {
-  const { openTabs, activeTabId, setActiveTab, closeTab } = useEditor(projectId);
+  const { openTabs, activeTabId, setActiveTab, closeTab, closeAllTabs, hasDirtyTabs } = useEditor(projectId);
   const tabElementsRef = useRef<Map<Id<"files">, HTMLDivElement | null>>(new Map());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const handleCloseAllClick = () => {
+    if (hasDirtyTabs()) {
+      setConfirmOpen(true);
+    } else {
+      closeAllTabs();
+    }
+  };
+
+  const handleConfirmCloseAll = () => {
+    setConfirmOpen(false);
+    closeAllTabs();
+  };
 
   // Handle Ctrl+W / Cmd+W shortcut to close active tab
   useEffect(() => {
@@ -199,26 +224,61 @@ export const TopNavigation = ({
   );
 
   return (
-    <ScrollArea className="flex-1">
-      <nav role="tablist" aria-label="Open files" className="bg-sidebar flex items-center h-8.75 border-b">
-        {openTabs.map((fileId, index) => (
-          <Tab
-            key={fileId}
-            fileId={fileId}
-            isFirst={index === 0}
-            projectId={projectId}
-            tabRef={(el) => {
-              if (el) {
-                tabElementsRef.current.set(fileId, el);
-              } else {
-                tabElementsRef.current.delete(fileId);
-              }
-            }}
-            onKeyDown={handleTabKeyDown}
-          />
-        ))}
-      </nav>
-      <ScrollBar orientation="horizontal" />
-    </ScrollArea>
+    <>
+      <div className="flex items-center border-b bg-sidebar">
+        <ScrollArea className="flex-1">
+          <nav role="tablist" aria-label="Open files" className="flex items-center h-8.75">
+            {openTabs.map((fileId, index) => (
+              <Tab
+                key={fileId}
+                fileId={fileId}
+                isFirst={index === 0}
+                projectId={projectId}
+                tabRef={(el) => {
+                  if (el) {
+                    tabElementsRef.current.set(fileId, el);
+                  } else {
+                    tabElementsRef.current.delete(fileId);
+                  }
+                }}
+                onKeyDown={handleTabKeyDown}
+              />
+            ))}
+          </nav>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
+        {openTabs.length > 0 && (
+          <div className="flex items-center px-1 border-l shrink-0">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={handleCloseAllClick}
+              aria-label="Close all tabs"
+              title="Close all tabs"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <XCircleIcon className="size-3.5" />
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close all tabs?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Some tabs contain unsaved changes. Closing all tabs will discard those changes. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmCloseAll}>
+              Close All
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };
