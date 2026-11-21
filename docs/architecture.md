@@ -562,3 +562,304 @@ HTTP status codes strictly reflect the underlying condition:
 - `403 Forbidden`: Authenticated user lacks permission to access or modify the specified project.
 - `404 Not Found`: Target project or conversation does not exist.
 - `500 Internal Server Error`: Server configuration errors (e.g. missing `NEXUS_CONVEX_INTERNAL_KEY`) or unhandled exceptions.
+
+---
+
+## 8. Convex Data Model and Mutation Lifecycle
+
+Nexus uses [Convex](https://www.convex.dev) as its real-time reactive cloud database and document storage engine. Convex maintains workspace projects, virtual file systems, chat conversations, assistant messages, execution traces, import/export progress states, and environment configurations.
+
+This section details the complete Convex data model, entity relationships, access authorization boundaries, index patterns, cascade deletion lifecycles, and contributor best practices.
+
+### A. Data Model Overview
+
+In Nexus, data persistence and synchronization follow strict boundary principles:
+1. **Project as the Primary Ownership Boundary:**
+   The `projects` table acts as the primary root entity for user authorization. Every user-created resource—files, conversations, messages, and execution traces—directly or transitively belongs to a project. An entity's access rights are determined by verifying whether the authenticated user's Clerk ID matches the project's `ownerId`.
+2. **Document IDs as Typed Foreign References:**
+   Convex documents utilize auto-generated, strongly typed IDs (`Id<"tableName">`). Relational integrity across tables (e.g., `files.projectId -> projects._id`, `files.parentId -> files._id`, `messages.conversationId -> conversations._id`) is managed and enforced through application logic in Convex mutations and queries.
+3. **Dual Execution Paths (Client vs. System):**
+   - **Public client mutations/queries** (`convex/projects.ts`, `convex/conversations.ts`, `convex/files.ts`) verify end-user identity via Clerk JWTs (`await ctx.auth.getUserIdentity()`).
+   - **Internal system mutations/queries** (`convex/system.ts`) facilitate background agent workflows (Inngest workers) and Next.js server actions, secured by `args.internalKey === process.env.NEXUS_CONVEX_INTERNAL_KEY`.
+4. **Source of Truth:**
+   The definitive schema definitions reside in [`convex/schema.ts`](../convex/schema.ts), while the concrete authorization and lifecycle semantics are enforced across [`convex/projects.ts`](../convex/projects.ts), [`convex/conversations.ts`](../convex/conversations.ts), [`convex/files.ts`](../convex/files.ts), and [`convex/system.ts`](../convex/system.ts).
+
+---
+
+### B. Table Reference
+
+The Convex database schema defines 5 document tables: `projects`, `files`, `conversations`, `messages`, and `executionEvents`.
+
+#### 1. `projects`
+- **Source:** [`convex/schema.ts`](../convex/schema.ts#L5-L71)
+- **Purpose:** Root entity representing a user's development workspace, containing project metadata, Git import/export statuses, batched progress tracking, and runtime execution settings.
+- **Important Fields:**
+  - `name` (`v.string()`): Display name of the project.
+  - `ownerId` (`v.string()`): Clerk user ID (`identity.subject`) establishing project ownership.
+  - `updatedAt` (`v.number()`): Timestamp of the most recent project modification.
+  - `importStatus` (*optional* `v.union("importing", "completed", "failed")`): Current status of GitHub repository import.
+  - `exportStatus` (*optional* `v.union("exporting", "completed", "failed", "cancelled")`): Current status of GitHub repository export.
+  - `exportRepoUrl` (*optional* `v.string()`): Target repository URL for exported project.
+  - `importProgress` (*optional* `v.object(...)`): Detailed batch counters for repository import (`totalFiles`, `processedFiles`, `successfulFiles`, `failedFiles`, `skippedFiles`, `currentBatch`, `totalBatches`, `errorMessage`, `updatedAt`).
+  - `exportProgress` (*optional* `v.object(...)`): Detailed batch counters for repository export (`status`, `totalFiles`, `processedFiles`, `successfulFiles`, `failedFiles`, `skippedFiles`, `currentBatch`, `totalBatches`, `errorMessage`, `updatedAt`).
+  - `settings` (*optional* `v.object(...)`): Runtime preview settings (`installCommand`, `devCommand`, `envVariables: Record<string, string>`).
+- **Parent Relationship:** None (root workspace entity).
+- **Ownership:** Explicitly owned by the user matching `ownerId`.
+- **Indexes:**
+  - `by_owner` on `["ownerId"]`: Fast retrieval of all projects owned by a specific user.
+- **Lifecycle:** Created via client mutation `create` in `projects.ts` or system mutation `createProject` / `createProjectWithConversation` in `system.ts`. Updated on settings changes, rename, import/export steps, or file touches. Deleted via `deleteProject` in `projects.ts`.
+
+#### 2. `files`
+- **Source:** [`convex/schema.ts`](../convex/schema.ts#L73-L85)
+- **Purpose:** Represents a file or directory node in the workspace virtual file system hierarchy. Supports both text files and binary storage-backed files.
+- **Important Fields:**
+  - `projectId` (`v.id("projects")`): Reference to the parent project workspace.
+  - `parentId` (*optional* `v.id("files")`): Reference to parent directory folder node; `undefined` indicates a root-level workspace file or folder.
+  - `name` (`v.string()`): Filename or directory name (must be unique among siblings sharing the same `parentId`).
+  - `type` (`v.union("file", "folder")`): Discriminator indicating whether the node is a directory or a file.
+  - `content` (*optional* `v.string()`): UTF-8 text content (populated for text files only; absent for binary files and folders).
+  - `storageId` (*optional* `v.id("_storage")`): Reference to Convex binary storage file (populated for binary files only; absent for text files and folders).
+  - `updatedAt` (`v.number()`): Timestamp of last file creation, content update, or rename.
+- **Parent Relationship:** References `projects._id` via `projectId`, and optionally references `files._id` via `parentId`.
+- **Ownership:** Inherited through `projectId -> projects.ownerId`.
+- **Indexes:**
+  - `by_project` on `["projectId"]`: Retrieves all files belonging to a project.
+  - `by_parent` on `["parentId"]`: Locates immediate child items of a folder.
+  - `by_project_parent` on `["projectId", "parentId"]`: Fast retrieval of siblings in a directory within a specific project.
+- **Lifecycle:** Created via client mutations `createFile`/`createFolder` in `files.ts` or system mutations `createFile`/`createFiles`/`createBinaryFile`/`createFolder` in `system.ts`. Updated via `updateFile` and `renameFile`. Deleted recursively via `deleteFile` in `files.ts` or `deleteFile`/`cleanup` in `system.ts` (also deleting any associated `storageId` object from Convex storage).
+
+#### 3. `conversations`
+- **Source:** [`convex/schema.ts`](../convex/schema.ts#L86-L91)
+- **Purpose:** Represents an AI assistant chat thread associated with a project.
+- **Important Fields:**
+  - `projectId` (`v.id("projects")`): Reference to the project owning the conversation.
+  - `title` (`v.string()`): User-facing title of the chat conversation.
+  - `updatedAt` (`v.number()`): Timestamp updated whenever new messages are appended or titles renamed.
+- **Parent Relationship:** References `projects._id` via `projectId`.
+- **Ownership:** Inherited through `projectId -> projects.ownerId`.
+- **Indexes:**
+  - `by_project` on `["projectId"]`: Queries conversations for a project ordered by recency.
+- **Lifecycle:** Created via client mutation `create` in `conversations.ts` or system mutation `createProjectWithConversation` in `system.ts`. Title updated via `updateConversationTitle` in `system.ts`. Deleted during project cascade deletion (`deleteProject` in `projects.ts`).
+
+#### 4. `messages`
+- **Source:** [`convex/schema.ts`](../convex/schema.ts#L92-L107)
+- **Purpose:** Stores individual conversational turns between the user and the AI assistant within a conversation.
+- **Important Fields:**
+  - `conversationId` (`v.id("conversations")`): Parent conversation reference.
+  - `projectId` (`v.id("projects")`): Denormalized project reference for project-scoped queries and cancellation checks.
+  - `role` (`v.union("user", "assistant")`): Author role of the message.
+  - `content` (`v.string()`): Markdown or plain text content of the message.
+  - `status` (*optional* `v.union("processing", "completed", "cancelled")`): Lifecycle state of assistant generation.
+- **Parent Relationship:** References `conversations._id` via `conversationId`, and references `projects._id` via `projectId`.
+- **Ownership:** Inherited through `projectId -> projects.ownerId` (verified via `conversations.projectId` lookup).
+- **Indexes:**
+  - `by_conversation` on `["conversationId"]`: Retrieves conversation messages in chronological order.
+  - `by_project_status` on `["projectId", "status"]`: Finds active messages (e.g. `processing`) within a project for cancellation or replacement.
+- **Lifecycle:** Created by system mutation `createMessage` in `system.ts`. Updated incrementally via `updateMessageStreamContent`, `updateMessageContent`, or `updateMessageStatus`. Deleted during project deletion (`deleteProject` in `projects.ts`).
+
+#### 5. `executionEvents`
+- **Source:** [`convex/schema.ts`](../convex/schema.ts#L108-L142)
+- **Purpose:** Records fine-grained tool invocation steps, execution milestones, and assistant reasoning progress for an assistant message run.
+- **Important Fields:**
+  - `conversationId` (`v.id("conversations")`): Associated conversation thread.
+  - `projectId` (`v.id("projects")`): Associated project workspace.
+  - `messageId` (`v.id("messages")`): Associated assistant message.
+  - `executionId` (`v.string()`): Unique Inngest run identifier for the execution job.
+  - `iteration` (`v.number()`): Agent step iteration counter.
+  - `eventType` (`v.union("tool_start", "tool_complete", "tool_fail", "execution_start", "execution_complete", "execution_cancel", "execution_fail")`): Specific event milestone.
+  - `toolExecutionId` (*optional* `v.string()`): Deterministic tool execution identifier ensuring retry idempotency.
+  - `toolName` (*optional* `v.string()`): Name of invoked tool (e.g., `createFiles`, `updateFile`, `readFiles`, `listFiles`).
+  - `description` (*optional* `v.string()`): Human-readable summary of the action.
+  - `filePaths` (*optional* `v.array(v.string())`): Workspace-relative paths touched by the tool.
+  - `status` (`v.union("running", "completed", "failed", "cancelled")`): Current execution status of the event.
+  - `startedAt` (`v.number()`): Timestamp when the tool or execution started.
+  - `completedAt` (*optional* `v.number()`): Timestamp when the tool or execution completed.
+  - `summary` (*optional* `v.string()`): Output summary or result details.
+  - `error` (*optional* `v.string()`): Error message if the tool or execution failed.
+- **Parent Relationship:** References `messages._id` via `messageId`, `conversations._id` via `conversationId`, and `projects._id` via `projectId`.
+- **Ownership:** Inherited through `projectId -> projects.ownerId` (verified in queries through `conversations.projectId`).
+- **Indexes:**
+  - `by_message` on `["messageId"]`: Fetches all execution events for a specific assistant message.
+  - `by_conversation` on `["conversationId"]`: Retrieves chronological event stream for a conversation.
+  - `by_execution` on `["executionId"]`: Tracks and updates running events for an Inngest execution run.
+  - `by_tool_execution` on `["toolExecutionId"]`: Idempotency lookup for step retries.
+- **Lifecycle:** Recorded by system mutations `recordExecutionStart`, `recordToolStart`, `recordToolComplete`, `recordToolFail`, and `recordExecutionEnd` in `system.ts`. Queried by client query `getExecutionEvents` in `conversations.ts` or `getExecutionEventsByMessage` in `system.ts`.
+
+---
+
+### C. Entity Relationship Diagram
+
+The following diagram illustrates the relationships between Convex entities. Foreign key constraints are enforced at the application mutation level rather than by the database engine:
+
+```mermaid
+erDiagram
+    projects ||--o{ files : "contains (projectId)"
+    files ||--o{ files : "subdirectories (parentId)"
+    files |o--o| "_storage" : "binary data (storageId)"
+    projects ||--o{ conversations : "owns (projectId)"
+    conversations ||--o{ messages : "groups (conversationId)"
+    projects ||--o{ messages : "denormalized (projectId)"
+    messages ||--o{ executionEvents : "traces (messageId)"
+    conversations ||--o{ executionEvents : "denormalized (conversationId)"
+    projects ||--o{ executionEvents : "denormalized (projectId)"
+
+    projects {
+        Id_projects id PK
+        string ownerId "Clerk User ID"
+        string name
+        number updatedAt
+        string importStatus "optional"
+        string exportStatus "optional"
+        string exportRepoUrl "optional"
+        object importProgress "optional"
+        object exportProgress "optional"
+        object settings "optional"
+    }
+
+    files {
+        Id_files id PK
+        Id_projects projectId FK
+        Id_files parentId FK "optional parent folder"
+        string name
+        string type "file | folder"
+        string content "optional text"
+        Id_storage storageId FK "optional binary"
+        number updatedAt
+    }
+
+    conversations {
+        Id_conversations id PK
+        Id_projects projectId FK
+        string title
+        number updatedAt
+    }
+
+    messages {
+        Id_messages id PK
+        Id_conversations conversationId FK
+        Id_projects projectId FK
+        string role "user | assistant"
+        string content
+        string status "processing | completed | cancelled"
+    }
+
+    executionEvents {
+        Id_executionEvents id PK
+        Id_conversations conversationId FK
+        Id_projects projectId FK
+        Id_messages messageId FK
+        string executionId "Inngest Run ID"
+        string toolExecutionId "optional"
+        string eventType
+        string status
+        number startedAt
+        number completedAt "optional"
+    }
+```
+
+---
+
+### D. Ownership and Authorization Boundaries
+
+Convex functions enforce strict authorization boundaries depending on whether they are client-facing or system-internal:
+
+```
++------------------------------------------------------------------------------------+
+| Client-Facing Functions (convex/projects.ts, convex/conversations.ts, files.ts)    |
++------------------------------------------------------------------------------------+
+  1. Verify Authentication:
+     const identity = await verifyAuth(ctx); // ctx.auth.getUserIdentity()
+  2. Resolve Project Context:
+     const project = await ctx.db.get("projects", projectId);
+  3. Verify Project Ownership:
+     if (project.ownerId !== identity.subject) throw new Error("Unauthorized");
+
++------------------------------------------------------------------------------------+
+| Internal System Functions (convex/system.ts)                                       |
++------------------------------------------------------------------------------------+
+  1. Verify Internal Secret:
+     validateInternalKey(args.internalKey); // args.internalKey === process.env.NEXUS_CONVEX_INTERNAL_KEY
+  2. Server-to-Server Trust:
+     Assumes caller (Inngest worker or Next.js route) has already verified user identity.
+```
+
+- **Public Client Queries & Mutations:**
+  - Require a valid Clerk JWT.
+  - Functions in `convex/files.ts` and `convex/conversations.ts` lookup the target document, resolve its associated `projectId`, fetch the project document, and verify that `project.ownerId === identity.subject`.
+  - Any attempt by User B to query or modify User A's files, conversations, or projects fails with an unauthorized error.
+- **Internal System Queries & Mutations:**
+  - Do not call `ctx.auth.getUserIdentity()`. They are called from trusted backend processes (Inngest functions or Next.js API routes) using `@/lib/convex-client`.
+  - Protected exclusively by `validateInternalKey(args.internalKey)`.
+  - Never expose internal system endpoints directly to frontend clients.
+
+---
+
+### E. Important Indexes and Access Patterns
+
+The schema defines targeted indexes to ensure efficient real-time queries and updates:
+
+| Table | Index Name | Indexed Fields | Supported Access Pattern |
+|---|---|---|---|
+| `projects` | `by_owner` | `["ownerId"]` | Listing all projects owned by the authenticated user (`projects.get`, `projects.getPartial`). |
+| `files` | `by_project` | `["projectId"]` | Full file tree retrieval (`files.getFiles`, WebContainer mounting, project export, project deletion cleanup). |
+| `files` | `by_parent` | `["parentId"]` | Traversal of child items in folder structures. |
+| `files` | `by_project_parent` | `["projectId", "parentId"]` | Immediate folder directory listing (`files.getFolderContents`), sibling collision checks for create/rename. |
+| `conversations` | `by_project` | `["projectId"]` | Listing conversation threads within a project ordered by recency (`conversations.getByProject`). |
+| `messages` | `by_conversation` | `["conversationId"]` | Chronological chat history retrieval (`conversations.getMessages`, `system.getRecentMessages`). |
+| `messages` | `by_project_status` | `["projectId", "status"]` | Project-scoped active assistant message cancellation and replacement (`system.getProcessingMessages`). |
+| `executionEvents` | `by_message` | `["messageId"]` | Fetching tool and execution trace events for an individual assistant message card. |
+| `executionEvents` | `by_conversation` | `["conversationId"]` | Conversation-wide real-time execution stream (`conversations.getExecutionEvents`). |
+| `executionEvents` | `by_execution` | `["executionId"]` | Inngest execution lifecycle updates (`system.recordExecutionEnd`). |
+| `executionEvents` | `by_tool_execution`| `["toolExecutionId"]` | Idempotent step retry checks for tool execution events (`system.recordToolStart`). |
+
+---
+
+### F. Cascade Deletion and Cleanup Responsibilities
+
+Convex does not provide database-level cascading foreign keys. All cascade deletions and storage cleanups are handled explicitly by mutation code.
+
+#### Cascade Deletion Matrix
+
+| Parent Deletion | Related Records | Cleanup Mechanism | Source Implementation |
+|---|---|---|---|
+| **Project** (`deleteProject`) | `messages` | Queried by `projectId` and by each conversation's `by_conversation` index; deleted before conversation records. | [`convex/projects.ts`](../convex/projects.ts#L130-L159) |
+| **Project** (`deleteProject`) | `conversations` | Queried via `by_project` index; deleted after child messages are deleted. | [`convex/projects.ts`](../convex/projects.ts#L141-L159) |
+| **Project** (`deleteProject`) | `files` | Queried via `by_project` index; deleted document by document. | [`convex/projects.ts`](../convex/projects.ts#L161-L192) |
+| **Project** (`deleteProject`) | Binary Storage (`_storage`) | Deleted via `ctx.storage.delete(file.storageId)` for any binary files before file record deletion. Throws on genuine failure to prevent orphaned storage. | [`convex/projects.ts`](../convex/projects.ts#L168-L190) |
+| **Project** (`deleteProject`) | `executionEvents` | **Not explicitly deleted.** Execution events retain historical trace logs unless manually purged. | [`convex/projects.ts`](../convex/projects.ts#L116-L199) |
+| **Folder File** (`deleteFile`) | Nested `files` & folders | Recursive deletion (`deleteRecursive`) queries children via `by_project_parent`, deletes descendants depth-first. | [`convex/files.ts`](../convex/files.ts#L270-L289) |
+| **Binary File** (`deleteFile`) | Binary Storage (`_storage`) | Deleted via `ctx.storage.delete(item.storageId)` prior to file document deletion. | [`convex/files.ts`](../convex/files.ts#L286) |
+| **Project Files** (`cleanup`) | Project `files` & storage | Bulk deletes all project files and associated storage files (used prior to repository re-import). | [`convex/system.ts`](../convex/system.ts#L478-L500) |
+
+> [!IMPORTANT]
+> When deleting projects, deletion operations are sequentially executed within a single Convex mutation transaction. Storage files are deleted prior to document records. If a storage deletion fails unexpectedly (excluding benign 404/not found errors), the mutation throws to avoid leaving untracked orphan storage objects.
+
+---
+
+### G. Mutation Lifecycle Checklist for Contributors
+
+When implementing new Convex mutations or queries, follow this verification checklist:
+
+1. **Determine Function Scope:**
+   - Use public client functions (`mutation`, `query`) for UI operations initiated with Clerk authentication.
+   - Use internal functions in `convex/system.ts` with `internalKey` validation for Inngest background workers and Next.js server actions.
+2. **Enforce Identity and Ownership:**
+   - In public endpoints, always call `const identity = await verifyAuth(ctx);`.
+   - Never trust caller-supplied `ownerId` or `userId`. Always check against `identity.subject`.
+   - For child entities (files, conversations, messages), retrieve the parent project and verify `project.ownerId === identity.subject`.
+3. **Input Validation:**
+   - Define strict argument validators using Convex `v.*` primitives (e.g. `v.id(...)`, `v.string()`, `v.union(...)`).
+4. **Query Performance & Index Usage:**
+   - Never perform unbounded table scans. Always use `.withIndex(...)` with the appropriate index (`by_project`, `by_project_parent`, `by_conversation`, etc.).
+5. **Idempotency & Concurrency:**
+   - Background steps invoked by Inngest must be idempotent. Use unique execution or tool keys (`by_tool_execution`, `by_execution`) to prevent duplicate writes on step retry.
+6. **Terminal State Protection:**
+   - Do not overwrite terminal states (e.g., messages or execution events marked `cancelled`) with stale background updates.
+7. **Cascade Cleanup:**
+   - If deleting parent entities, clean up associated children and delete storage files (`ctx.storage.delete(storageId)`).
+8. **Denormalization Consistency:**
+   - When mutating child entities that update parent summary fields (e.g. `projects.updatedAt`), patch the parent entity within the same mutation.
+9. **Security & Secrets:**
+   - Never store sensitive secrets, tokens, or credentials in project documents or execution event logs.
+10. **Automated Testing:**
+    - Write unit and regression tests verifying both authorized paths and unauthorized rejections (e.g. User B accessing User A's resources).
