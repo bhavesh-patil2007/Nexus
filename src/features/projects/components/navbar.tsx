@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CloudCheckIcon, LoaderIcon, SettingsIcon } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { Poppins } from "next/font/google";
@@ -44,28 +44,51 @@ export const Navbar = ({
   const [isRenaming, setIsRenaming] = useState(false);
   const [name, setName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const isCommittedRef = useRef(false);
 
   const handleStartRename = () => {
     if (!project) return;
+    isCommittedRef.current = false;
     setName(project.name);
     setIsRenaming(true);
   };
 
   const handleSubmit = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
+
     if (!project) return;
     setIsRenaming(false);
 
     const trimmedName = name.trim();
     if (!trimmedName || trimmedName === project.name) return;
 
-    renameProject({ id: projectId, name: trimmedName });
+    try {
+      const result = renameProject({ id: projectId, name: trimmedName });
+      if (result && typeof (result as Promise<unknown>).catch === "function") {
+        (result as Promise<unknown>).catch((error) => {
+          console.error(error);
+        });
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleCancel = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
+    if (project) {
+      setName(project.name);
+    }
+    setIsRenaming(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       handleSubmit();
     } else if (e.key === "Escape") {
-      setIsRenaming(false);
+      handleCancel();
     }
   };
 
