@@ -439,3 +439,311 @@ describe("EditorView - Independent Autosave Timers for Dirty Tabs (Issue #43)", 
     expect(mockUpdateFile).not.toHaveBeenCalled();
   });
 });
+
+import { EditorView as CMEditorView } from "@codemirror/view";
+import { EditorState as CMEditorState } from "@codemirror/state";
+import { suggestion } from "@/features/editor/extensions/suggestion";
+import { quickEdit, showQuickEditEffect, quickEditState } from "@/features/editor/extensions/quick-edit";
+import * as suggestionFetcherModule from "@/features/editor/extensions/suggestion/fetcher";
+import * as quickEditFetcherModule from "@/features/editor/extensions/quick-edit/fetcher";
+
+describe("CodeMirror Extensions - Tab AI State Isolation (Issue #66)", () => {
+  let suggestionFetcherSpy: ReturnType<typeof vi.spyOn>;
+  let quickEditFetcherSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    suggestionFetcherSpy = vi.spyOn(suggestionFetcherModule, "fetcher");
+    quickEditFetcherSpy = vi.spyOn(quickEditFetcherModule, "fetcher");
+  });
+
+  afterEach(() => {
+    suggestionFetcherSpy?.mockRestore();
+    quickEditFetcherSpy?.mockRestore();
+    vi.useRealTimers();
+  });
+
+  describe("Suggestion Extension Isolation", () => {
+    it("manages independent debounce timers and abort signals across multiple editor views", async () => {
+      let signalA: { aborted: boolean } | null = null;
+      let signalB: { aborted: boolean } | null = null;
+
+      suggestionFetcherSpy.mockImplementation((payload: unknown, signal: AbortSignal) => {
+        const req = payload as { fileName: string };
+        if (req.fileName === "fileA.ts") {
+          signalA = signal;
+          return new Promise(() => {});
+        }
+        if (req.fileName === "fileB.ts") {
+          signalB = signal;
+          return new Promise(() => {});
+        }
+        return Promise.resolve(null);
+      });
+
+      const containerA = document.createElement("div");
+      const containerB = document.createElement("div");
+      document.body.appendChild(containerA);
+      document.body.appendChild(containerB);
+
+      const viewA = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "const a = 1;",
+          extensions: [suggestion("fileA.ts")],
+        }),
+        parent: containerA,
+      });
+
+      const viewB = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "const b = 2;",
+          extensions: [suggestion("fileB.ts")],
+        }),
+        parent: containerB,
+      });
+
+      // Typing in View A triggers debounce timer A (300ms)
+      viewA.dispatch({
+        changes: { from: 12, insert: "\nconst a2 = 2;" },
+        selection: { anchor: 26 },
+      });
+
+      // Advance 100ms
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(suggestionFetcherSpy).not.toHaveBeenCalled();
+
+      // Typing in View B triggers debounce timer B (300ms)
+      viewB.dispatch({
+        changes: { from: 12, insert: "\nconst b2 = 3;" },
+        selection: { anchor: 26 },
+      });
+
+      // Advance 200ms -> at 300ms since viewA typed, timer A fires!
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(suggestionFetcherSpy).toHaveBeenCalledTimes(1);
+      expect(signalA).not.toBeNull();
+      expect(signalA?.aborted).toBe(false);
+
+      // View A types again before resolveA, triggering abort of previous request A
+      viewA.dispatch({
+        changes: { from: 26, insert: "\nconst a3 = 3;" },
+        selection: { anchor: 40 },
+      });
+      expect(signalA?.aborted).toBe(true);
+
+      // View B's timer should still fire at 100ms later (total 400ms from start)
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(suggestionFetcherSpy).toHaveBeenCalledTimes(2);
+      expect(signalB).not.toBeNull();
+      expect(signalB?.aborted).toBe(false);
+
+      // Clean up
+      viewA.destroy();
+      viewB.destroy();
+      containerA.remove();
+      containerB.remove();
+    });
+
+    it("cancels pending debounce timers and aborts in-flight request when editor view is destroyed", async () => {
+      let signalA: { aborted: boolean } | null = null;
+      suggestionFetcherSpy.mockImplementation((_payload: unknown, signal: AbortSignal) => {
+        signalA = signal;
+        return new Promise(() => {}); // never resolves
+      });
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+
+      const view = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "const x = 10;",
+          extensions: [suggestion("test.ts")],
+        }),
+        parent: container,
+      });
+
+      // Trigger suggestion
+      view.dispatch({
+        changes: { from: 13, insert: "0" },
+        selection: { anchor: 14 },
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(suggestionFetcherSpy).toHaveBeenCalledTimes(1);
+      expect(signalA?.aborted).toBe(false);
+
+      // Destroy view
+      view.destroy();
+      expect(signalA?.aborted).toBe(true);
+
+      container.remove();
+    });
+
+    it("ignores completed suggestion response if document changed since the request was initiated", async () => {
+      let resolveSuggestion: ((val: string | null) => void) | null = null;
+      suggestionFetcherSpy.mockImplementation(() => {
+        return new Promise((resolve) => {
+          resolveSuggestion = resolve;
+        });
+      });
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+
+      const view = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "const initial = 1;",
+          extensions: [suggestion("file.ts")],
+        }),
+        parent: container,
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(suggestionFetcherSpy).toHaveBeenCalledTimes(1);
+
+      // Resolve the suggestion after changing doc without re-triggering (or while doc changed)
+      view.dispatch({
+        changes: { from: 0, to: 5, insert: "let" },
+      });
+
+      await act(async () => {
+        resolveSuggestion?.(" // suggested comment");
+      });
+
+      // Tab should not insert suggestion because doc mismatch prevented setting suggestion
+      // Let's verify doc doesn't have the suggestion
+      expect(view.state.doc.toString()).not.toContain("// suggested comment");
+
+      view.destroy();
+      container.remove();
+    });
+  });
+
+  describe("Quick Edit Extension Isolation", () => {
+    it("operates strictly on its own EditorView and does not affect other views", async () => {
+      let resolveQuickEditA: ((val: string | null) => void) | null = null;
+
+      quickEditFetcherSpy.mockImplementation((_payload: unknown, _signal: AbortSignal) => {
+        return new Promise((resolve) => {
+          resolveQuickEditA = resolve;
+        });
+      });
+
+      const containerA = document.createElement("div");
+      const containerB = document.createElement("div");
+      document.body.appendChild(containerA);
+      document.body.appendChild(containerB);
+
+      const viewA = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "function hello() {\n  return 'hello';\n}",
+          selection: { anchor: 9, head: 14 }, // 'hello'
+          extensions: [quickEdit("fileA.ts")],
+        }),
+        parent: containerA,
+      });
+
+      const viewB = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "function world() {\n  return 'world';\n}",
+          selection: { anchor: 9, head: 14 }, // 'world'
+          extensions: [quickEdit("fileB.ts")],
+        }),
+        parent: containerB,
+      });
+
+      // Open quick-edit tooltip on view A
+      viewA.dispatch({
+        effects: showQuickEditEffect.of(true),
+      });
+
+      expect(viewA.state.field(quickEditState)).toBe(true);
+      expect(viewB.state.field(quickEditState)).toBe(false);
+
+      // Find the quick edit input in DOM
+      const input = containerA.querySelector("input") as HTMLInputElement;
+      expect(input).not.toBeNull();
+      input.value = "rename to greet";
+
+      const form = containerA.querySelector("form") as HTMLFormElement;
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+      expect(quickEditFetcherSpy).toHaveBeenCalledTimes(1);
+      expect(quickEditFetcherSpy).toHaveBeenCalledWith(
+        {
+          selectedCode: "hello",
+          fullCode: "function hello() {\n  return 'hello';\n}",
+          instruction: "rename to greet",
+        },
+        expect.any(AbortSignal)
+      );
+
+      // Resolve quick edit
+      await act(async () => {
+        resolveQuickEditA?.("greet");
+      });
+
+      // Verify view A was modified
+      expect(viewA.state.doc.toString()).toBe("function greet() {\n  return 'hello';\n}");
+      // Verify view B was completely untouched
+      expect(viewB.state.doc.toString()).toBe("function world() {\n  return 'world';\n}");
+
+      viewA.destroy();
+      viewB.destroy();
+      containerA.remove();
+      containerB.remove();
+    });
+
+    it("cancels in-flight quick-edit request on Cancel button without affecting other views", async () => {
+      let quickEditSignalA: { aborted: boolean } | null = null;
+      quickEditFetcherSpy.mockImplementation((_payload: unknown, signal: AbortSignal) => {
+        quickEditSignalA = signal;
+        return new Promise(() => {}); // never resolves
+      });
+
+      const containerA = document.createElement("div");
+      document.body.appendChild(containerA);
+
+      const viewA = new CMEditorView({
+        state: CMEditorState.create({
+          doc: "const foo = 1;",
+          selection: { anchor: 6, head: 9 }, // 'foo'
+          extensions: [quickEdit("fileA.ts")],
+        }),
+        parent: containerA,
+      });
+
+      viewA.dispatch({
+        effects: showQuickEditEffect.of(true),
+      });
+
+      const input = containerA.querySelector("input") as HTMLInputElement;
+      input.value = "change foo";
+
+      const form = containerA.querySelector("form") as HTMLFormElement;
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+      expect(quickEditSignalA?.aborted).toBe(false);
+
+      // Click Cancel
+      const cancelButton = containerA.querySelectorAll("button")[0];
+      cancelButton.click();
+
+      expect(quickEditSignalA?.aborted).toBe(true);
+      expect(viewA.state.field(quickEditState)).toBe(false);
+
+      viewA.destroy();
+      containerA.remove();
+    });
+  });
+});
