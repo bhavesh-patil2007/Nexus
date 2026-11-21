@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { FileIcon, FolderIcon } from "@react-symbols/icons/utils";
 import { getItemPadding } from "./constants";
@@ -20,11 +20,20 @@ export const RenameInput = ({
   onCancel: () => void;
 }) => {
   const [value, setValue] = useState(defaultValue);
+  const isCommittedRef = useRef(false);
 
   const handleSubmit = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
     const trimmedValue = value.trim() || defaultValue;
     onSubmit(trimmedValue);
   }
+
+  const handleCancel = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
+    onCancel();
+  };
 
   return (
     <div className="w-full flex items-center gap-1 h-5.5 bg-accent/30"
@@ -56,7 +65,7 @@ export const RenameInput = ({
             handleSubmit();
           }
           if (e.key === "Escape") {
-            onCancel();
+            handleCancel();
           }
         }}
         onFocus={(e) => {

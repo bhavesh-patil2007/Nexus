@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { FileIcon, FolderIcon } from "@react-symbols/icons/utils";
 import { getItemPadding } from "./constants";
@@ -15,11 +15,20 @@ export const CreateInput = ({
   onCancel: () => void;
 }) => {
   const [value, setValue] = useState("");
+  const isCommittedRef = useRef(false);
 
   const handleSubmit = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
     const trimmedValue = value.trim();
     if (trimmedValue) onSubmit(trimmedValue);
     else onCancel();
+  };
+
+  const handleCancel = () => {
+    if (isCommittedRef.current) return;
+    isCommittedRef.current = true;
+    onCancel();
   };
 
   return (
@@ -47,7 +56,7 @@ export const CreateInput = ({
         onBlur={handleSubmit}
         onKeyDown={(e) => {
           if (e.key === "Enter") handleSubmit();
-          if (e.key === "Escape") onCancel();
+          if (e.key === "Escape") handleCancel();
         }}
       />
     </div>
