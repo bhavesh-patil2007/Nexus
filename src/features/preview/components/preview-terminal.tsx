@@ -10,6 +10,7 @@ interface PreviewTerminalProps {
   output?: string;
   onData?: (data: string) => void;
   onResize?: (dimensions: { cols: number; rows: number }) => void;
+  onClearRef?: React.MutableRefObject<(() => void) | null>;
   disabled?: boolean;
 }
 
@@ -17,6 +18,7 @@ export const PreviewTerminal = ({
   output = "",
   onData,
   onResize,
+  onClearRef,
   disabled = false,
 }: PreviewTerminalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -30,6 +32,22 @@ export const PreviewTerminal = ({
     onDataRef.current = onData;
     onResizeRef.current = onResize;
   }, [onData, onResize]);
+
+  // Connect clear callback to parent ref if provided
+  useEffect(() => {
+    if (onClearRef) {
+      onClearRef.current = () => {
+        if (terminalRef.current) {
+          terminalRef.current.clear();
+        }
+      };
+    }
+    return () => {
+      if (onClearRef) {
+        onClearRef.current = null;
+      }
+    };
+  }, [onClearRef]);
 
   // Initialize terminal
   useEffect(() => {
