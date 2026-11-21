@@ -9,6 +9,7 @@ import { useEditor } from "../hooks/use-editor";
 import { TopNavigation } from "./top-navigation";
 import { FileBreadcrumbs } from "./file-breadcrumbs";
 import { Id } from "../../../../convex/_generated/dataModel";
+import { Button } from "@/components/ui/button";
 
 const DEBOUNCE_MS = 1500;
 
@@ -143,6 +144,18 @@ export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
           {activeTabId && <FileBreadcrumbs projectId={projectId} />}
         </div>
         <div className="flex items-center gap-2 pr-2">
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={handleManualSave}
+            disabled={!activeTabId || !isDirty || isSaving}
+            aria-label="Save file"
+            title="Save file (Ctrl+S / Cmd+S)"
+            className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <SaveIcon className="size-3" />
+            <span>Save</span>
+          </Button>
           {isSaving && (
             <span className="flex items-center gap-1 text-blue-500">
               <RefreshCwIcon className="size-3 animate-spin" /> Saving...
