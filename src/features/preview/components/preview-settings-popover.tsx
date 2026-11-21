@@ -14,33 +14,77 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel, FieldDescription, FieldError } from "@/components/ui/field";
 
 import { Doc, Id } from "../../../../convex/_generated/dataModel";
 
-const formSchema = z.object({
-  installCommand: z.string(),
-  devCommand: z.string(),
-  envVariablesText: z.string(),
-});
+export const ENV_VAR_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export interface EnvVariableValidationError {
+  lineNumber: number;
+  message: string;
+}
+
+export interface EnvVariableValidationResult {
+  valid: boolean;
+  errors: EnvVariableValidationError[];
+  env: Record<string, string>;
+}
+
+export const validateEnvVariables = (text?: string): EnvVariableValidationResult => {
+  if (!text) {
+    return { valid: true, errors: [], env: {} };
+  }
+
+  const errors: EnvVariableValidationError[] = [];
+  const env: Record<string, string> = {};
+  const lines = text.split("\n");
+
+  for (let idx = 0; idx < lines.length; idx++) {
+    const originalLineNumber = idx + 1;
+    const line = lines[idx];
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) {
+      errors.push({
+        lineNumber: originalLineNumber,
+        message: `Line ${originalLineNumber}: Missing "=" separator.`,
+      });
+      continue;
+    }
+
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim();
+
+    if (!key || !ENV_VAR_NAME_REGEX.test(key)) {
+      errors.push({
+        lineNumber: originalLineNumber,
+        message: `Line ${originalLineNumber}: Invalid environment variable name "${key}".`,
+      });
+      continue;
+    }
+
+    env[key] = val;
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    env,
+  };
+};
 
 export const parseEnvVariables = (text?: string): Record<string, string> => {
-  if (!text) return {};
-  const result: Record<string, string> = {};
-  const lines = text.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx !== -1) {
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim();
-      if (key) {
-        result[key] = val;
-      }
-    }
+  const result = validateEnvVariables(text);
+  if (!result.valid) {
+    throw new Error(result.errors.map((e) => e.message).join("\n"));
   }
-  return result;
+  return result.env;
 };
 
 export const formatEnvVariables = (env?: Record<string, string>): string => {
@@ -49,6 +93,22 @@ export const formatEnvVariables = (env?: Record<string, string>): string => {
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
 };
+
+const formSchema = z.object({
+  installCommand: z.string(),
+  devCommand: z.string(),
+  envVariablesText: z.string().superRefine((val, ctx) => {
+    const result = validateEnvVariables(val);
+    if (!result.valid) {
+      for (const err of result.errors) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: err.message,
+        });
+      }
+    }
+  }),
+});
 
 interface PreviewSettingsPopoverProps {
   projectId: Id<"projects">;
@@ -74,7 +134,11 @@ export const PreviewSettingsPopover = ({
       onSubmit: formSchema,
     },
     onSubmit: async ({ value }) => {
-      const parsedEnv = parseEnvVariables(value.envVariablesText);
+      const result = validateEnvVariables(value.envVariablesText);
+      if (!result.valid) {
+        return;
+      }
+      const parsedEnv = result.env;
       await updateSettings({
         id: projectId,
         settings: {
@@ -166,24 +230,30 @@ export const PreviewSettingsPopover = ({
               )}
             </form.Field>
             <form.Field name="envVariablesText">
-              {(field) => (
-                <Field>
-                  <FieldLabel htmlFor={field.name}>Environment Variables</FieldLabel>
-                  <textarea
-                    id={field.name}
-                    name={field.name}
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                    placeholder={"NODE_ENV=development\nPORT=3000"}
-                    rows={3}
-                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-xs shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 font-mono resize-y"
-                  />
-                  <FieldDescription>
-                    KEY=VALUE pairs, one per line
-                  </FieldDescription>
-                </Field>
-              )}
+              {(field) => {
+                const isInvalid = !field.state.meta.isValid;
+
+                return (
+                  <Field data-invalid={isInvalid}>
+                    <FieldLabel htmlFor={field.name}>Environment Variables</FieldLabel>
+                    <textarea
+                      id={field.name}
+                      name={field.name}
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(e) => field.handleChange(e.target.value)}
+                      aria-invalid={isInvalid}
+                      placeholder={"NODE_ENV=development\nPORT=3000"}
+                      rows={3}
+                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-xs shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 font-mono resize-y"
+                    />
+                    <FieldDescription>
+                      KEY=VALUE pairs, one per line
+                    </FieldDescription>
+                    {isInvalid && <FieldError errors={field.state.meta.errors} />}
+                  </Field>
+                );
+              }}
             </form.Field>
             <form.Subscribe
               selector={(state) => [state.canSubmit, state.isSubmitting]}

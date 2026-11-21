@@ -2,9 +2,84 @@ import { describe, expect, it } from "vitest";
 import {
   parseEnvVariables,
   formatEnvVariables,
+  validateEnvVariables,
+  ENV_VAR_NAME_REGEX,
 } from "@/features/preview/components/preview-settings-popover";
 
 describe("PreviewSettingsPopover environment variable utilities", () => {
+  describe("ENV_VAR_NAME_REGEX", () => {
+    it("should accept valid environment variable names", () => {
+      expect(ENV_VAR_NAME_REGEX.test("PORT")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("NODE_ENV")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("_PRIVATE")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("APP2")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("lowercase_var")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("Mixed_Case_123")).toBe(true);
+      expect(ENV_VAR_NAME_REGEX.test("_")).toBe(true);
+    });
+
+    it("should reject invalid environment variable names", () => {
+      expect(ENV_VAR_NAME_REGEX.test("BAD NAME")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("1PORT")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("FOO-BAR")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("FOO.BAR")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("FOO$BAR")).toBe(false);
+      expect(ENV_VAR_NAME_REGEX.test("FOO@BAR")).toBe(false);
+    });
+  });
+
+  describe("validateEnvVariables", () => {
+    it("should return valid result for valid entries", () => {
+      const result = validateEnvVariables("PORT=3000\nNODE_ENV=development\n_SECRET=key");
+      expect(result.valid).toBe(true);
+      expect(result.errors).toEqual([]);
+      expect(result.env).toEqual({
+        PORT: "3000",
+        NODE_ENV: "development",
+        _SECRET: "key",
+      });
+    });
+
+    it("should report line numbers and invalid name for bad names", () => {
+      const input = "PORT=3000\nBAD NAME=value\n1PORT=3000\nFOO-BAR=val\nFOO.BAR=val\n=value";
+      const result = validateEnvVariables(input);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual([
+        { lineNumber: 2, message: 'Line 2: Invalid environment variable name "BAD NAME".' },
+        { lineNumber: 3, message: 'Line 3: Invalid environment variable name "1PORT".' },
+        { lineNumber: 4, message: 'Line 4: Invalid environment variable name "FOO-BAR".' },
+        { lineNumber: 5, message: 'Line 5: Invalid environment variable name "FOO.BAR".' },
+        { lineNumber: 6, message: 'Line 6: Invalid environment variable name "".' },
+      ]);
+    });
+
+    it("should report line numbers for malformed lines missing '=' separator", () => {
+      const input = "# Header comment\nPORT=3000\n\nMALFORMED_LINE\nJUST_A_WORD";
+      const result = validateEnvVariables(input);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual([
+        { lineNumber: 4, message: 'Line 4: Missing "=" separator.' },
+        { lineNumber: 5, message: 'Line 5: Missing "=" separator.' },
+      ]);
+    });
+
+    it("should preserve original line numbers when comments and blank lines precede errors", () => {
+      const input = "\n# Comment 1\n# Comment 2\n\n   \nINVALID-KEY=test\n";
+      const result = validateEnvVariables(input);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toEqual([
+        { lineNumber: 6, message: 'Line 6: Invalid environment variable name "INVALID-KEY".' },
+      ]);
+    });
+
+    it("should handle empty or undefined input safely", () => {
+      expect(validateEnvVariables("")).toEqual({ valid: true, errors: [], env: {} });
+      expect(validateEnvVariables(undefined)).toEqual({ valid: true, errors: [], env: {} });
+      expect(validateEnvVariables("   \n\n# comment\n")).toEqual({ valid: true, errors: [], env: {} });
+    });
+  });
+
   describe("parseEnvVariables", () => {
     describe("A. Standard parsing", () => {
       it("should parse a single KEY=VALUE pair", () => {
@@ -20,6 +95,15 @@ describe("PreviewSettingsPopover environment variable utilities", () => {
           PORT: "3000",
           NODE_ENV: "production",
           DEBUG: "false",
+        });
+      });
+
+      it("should accept valid lowercase, underscore-prefixed, and alphanumeric names", () => {
+        const input = "port=3000\n_INTERNAL_KEY=secret\nAPP_V2_PORT=8080";
+        expect(parseEnvVariables(input)).toEqual({
+          port: "3000",
+          _INTERNAL_KEY: "secret",
+          APP_V2_PORT: "8080",
         });
       });
     });
@@ -81,9 +165,17 @@ describe("PreviewSettingsPopover environment variable utilities", () => {
             "postgres://user:pass@host:5432/db?sslmode=require&pool_timeout=10",
         });
       });
+
+      it("should preserve values with special characters, punctuation, and spaces in value", () => {
+        const input = 'WELCOME_MSG="Hello, World!"\nCONFIG={"debug": true}';
+        expect(parseEnvVariables(input)).toEqual({
+          WELCOME_MSG: '"Hello, World!"',
+          CONFIG: '{"debug": true}',
+        });
+      });
     });
 
-    describe("E. Edge cases", () => {
+    describe("E. Edge cases and error validation", () => {
       it("should return an empty object for empty string input", () => {
         expect(parseEnvVariables("")).toEqual({});
       });
@@ -99,18 +191,39 @@ describe("PreviewSettingsPopover environment variable utilities", () => {
         });
       });
 
-      it("should ignore malformed lines without an '=' sign", () => {
+      it("should throw an error for malformed lines without an '=' sign", () => {
         const input = "MALFORMED_LINE\nJUST_A_WORD\nVALID=1";
-        expect(parseEnvVariables(input)).toEqual({
-          VALID: "1",
-        });
+        expect(() => parseEnvVariables(input)).toThrowError(
+          'Line 1: Missing "=" separator.\nLine 2: Missing "=" separator.'
+        );
       });
 
-      it("should ignore lines with empty keys like =value", () => {
+      it("should throw an error for lines with empty keys like =value", () => {
         const input = "=empty_key\nGOOD=value";
-        expect(parseEnvVariables(input)).toEqual({
-          GOOD: "value",
-        });
+        expect(() => parseEnvVariables(input)).toThrowError(
+          'Line 1: Invalid environment variable name "".'
+        );
+      });
+
+      it("should throw an error for variable names with spaces", () => {
+        const input = "BAD NAME=value";
+        expect(() => parseEnvVariables(input)).toThrowError(
+          'Line 1: Invalid environment variable name "BAD NAME".'
+        );
+      });
+
+      it("should throw an error for variable names starting with digits", () => {
+        const input = "1PORT=3000";
+        expect(() => parseEnvVariables(input)).toThrowError(
+          'Line 1: Invalid environment variable name "1PORT".'
+        );
+      });
+
+      it("should throw an error for variable names containing hyphens or dots", () => {
+        const input = "FOO-BAR=val\nFOO.BAR=val";
+        expect(() => parseEnvVariables(input)).toThrowError(
+          'Line 1: Invalid environment variable name "FOO-BAR".\nLine 2: Invalid environment variable name "FOO.BAR".'
+        );
       });
     });
   });
