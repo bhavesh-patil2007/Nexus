@@ -440,6 +440,233 @@ describe("EditorView - Independent Autosave Timers for Dirty Tabs (Issue #43)", 
   });
 });
 
+describe("EditorView - Visible Save Control in Status Bar (Issue #77)", () => {
+  const projectId = "proj_1" as Id<"projects">;
+  const fileA = "file_a" as Id<"files">;
+  const fileB = "file_b" as Id<"files">;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mockUpdateFile.mockResolvedValue({});
+
+    useEditorStore.setState({ tabs: new Map() });
+
+    const store = useEditorStore.getState();
+    store.openFile(projectId, fileA, { pinned: true, initialContent: "initial A", updatedAt: 100 });
+    store.openFile(projectId, fileB, { pinned: true, initialContent: "initial B", updatedAt: 100 });
+    store.setActiveTab(projectId, fileA);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A. Rendering and Accessibility
+  it("renders Save button in the status bar with accessible name and title", () => {
+    render(<EditorView projectId={projectId} />);
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton).toBeDefined();
+    expect(saveButton.getAttribute("title")).toBe("Save file (Ctrl+S / Cmd+S)");
+  });
+
+  it("disables Save button when there is no active file", () => {
+    useEditorStore.setState({ tabs: new Map() });
+    render(<EditorView projectId={projectId} />);
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("disables Save button when active file is clean", () => {
+    render(<EditorView projectId={projectId} />);
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("enables Save button when active file is dirty and not saving", () => {
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "edited A" } });
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("disables Save button while a save is in progress", async () => {
+    let resolveSave: (value: unknown) => void = () => {};
+    mockUpdateFile.mockImplementation(() => new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "saving content" } });
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton.hasAttribute("disabled")).toBe(false);
+
+    // Click Save button
+    act(() => {
+      fireEvent.click(saveButton);
+    });
+
+    // While saving is pending, saveButton should be disabled
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Saving...")).toBeDefined();
+
+    // Resolve save
+    await act(async () => {
+      resolveSave({});
+    });
+
+    // After save completes, file is clean so saveButton is disabled
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Saved")).toBeDefined();
+  });
+
+  // B. Manual Save Behavior
+  it("clicking Save invokes manual save and updates the current active file", async () => {
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "manual save A" } });
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1);
+    expect(mockUpdateFile).toHaveBeenCalledWith({
+      id: fileA,
+      content: "manual save A",
+    });
+  });
+
+  it("clicking Save cancels the pending autosave timer for that file", async () => {
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "save once" } });
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1);
+
+    // Advance timers past debounce window
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    // Should still only have been called once (autosave timer was cancelled)
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking Save triggers the same mutation path as Ctrl/Cmd+S", async () => {
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "shortcut equivalence" } });
+    });
+
+    const manualSaveBtn = screen.getByTestId("manual-save-btn");
+    await act(async () => {
+      fireEvent.click(manualSaveBtn);
+    });
+
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1);
+    expect(mockUpdateFile).toHaveBeenCalledWith({
+      id: fileA,
+      content: "shortcut equivalence",
+    });
+  });
+
+  // C. Failure and Retry
+  it("allows retry via Save button after a failed save", async () => {
+    mockUpdateFile.mockRejectedValueOnce(new Error("Network error"));
+
+    render(<EditorView projectId={projectId} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "retry content" } });
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+
+    // Initial save attempt fails
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Save failed: Network error")).toBeDefined();
+
+    // Since file is still dirty and no longer saving, Save button is enabled for retry
+    expect(saveButton.hasAttribute("disabled")).toBe(false);
+
+    // Second click (retry)
+    mockUpdateFile.mockResolvedValueOnce({});
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    expect(mockUpdateFile).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Saved")).toBeDefined();
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  // D. Conflict and Unsupported Files
+  it("preserves conflict detection and does not overwrite remote changes unexpectedly", () => {
+    render(<EditorView projectId={projectId} />);
+
+    // Make local edit
+    act(() => {
+      fireEvent.change(screen.getByTestId("editor-input"), { target: { value: "local edit" } });
+    });
+
+    // Simulate external remote update arriving while file is dirty
+    act(() => {
+      useEditorStore.getState().handleRemoteUpdate(projectId, fileA, "remote concurrent edit", 200);
+    });
+
+    // Conflict banner should appear
+    expect(screen.getByText("Conflict Detected:")).toBeDefined();
+    expect(screen.getByText("Keep my changes & save")).toBeDefined();
+    expect(screen.getByText("Accept external changes")).toBeDefined();
+  });
+
+  it("handles binary files safely without exposing active editor", () => {
+    const fileBinary = "file_bin" as Id<"files">;
+    mockFilesData.file_bin = { _id: "file_bin", name: "image.png", storageId: "storage_123" };
+
+    useEditorStore.getState().openFile(projectId, fileBinary, { pinned: true });
+    useEditorStore.getState().setActiveTab(projectId, fileBinary);
+
+    render(<EditorView projectId={projectId} />);
+
+    expect(
+      screen.getByText(
+        "The file is not displayed in the text editor because it is either binary or uses an unsupported text encoding."
+      )
+    ).toBeDefined();
+
+    const saveButton = screen.getByRole("button", { name: "Save file" });
+    expect(saveButton.hasAttribute("disabled")).toBe(true);
+  });
+});
+
 import { EditorView as CMEditorView } from "@codemirror/view";
 import { EditorState as CMEditorState } from "@codemirror/state";
 import { suggestion } from "@/features/editor/extensions/suggestion";
