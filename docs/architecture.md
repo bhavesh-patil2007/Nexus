@@ -206,11 +206,12 @@ sequenceDiagram
 - None of these are prefixed with `NEXT_PUBLIC_`, ensuring they are never bundled into client JavaScript.
 
 ### 4. WebContainer Sandbox & Cross-Origin Isolation
-- WebContainer requires `SharedArrayBuffer` support in modern browsers.
+- WebContainer requires `SharedArrayBuffer` and WebAssembly threads support in modern browsers.
 - In `next.config.ts`, Nexus configures:
   - `Cross-Origin-Embedder-Policy: credentialless`
   - `Cross-Origin-Opener-Policy: same-origin`
-- This isolates the browser execution environment and prevents cross-origin data leakage.
+- This isolates the browser execution environment, satisfies browser security gates for `SharedArrayBuffer`, and prevents cross-origin data leakage while permitting necessary subresources (fonts, images, external previews) without strict CORP headers.
+- For complete browser support matrices, reverse-proxy header preservation guidelines, verification checks, and debugging procedures, see [Section 9: WebContainer Browser Compatibility and Deployment Guide](#9-webcontainer-browser-compatibility-and-deployment-guide).
 
 ---
 
@@ -863,3 +864,173 @@ When implementing new Convex mutations or queries, follow this verification chec
    - Never store sensitive secrets, tokens, or credentials in project documents or execution event logs.
 10. **Automated Testing:**
     - Write unit and regression tests verifying both authorized paths and unauthorized rejections (e.g. User B accessing User A's resources).
+
+---
+
+## 9. WebContainer Browser Compatibility and Deployment Guide
+
+Nexus executes client-side Node.js containers directly inside the browser using the [WebContainer API](https://webcontainers.io) (`@webcontainer/api`) and [xterm.js](https://xtermjs.org). This powers the in-browser development environment, interactive terminal shell (`jsh`), dependency installation (`npm install`), and live project preview server.
+
+Because WebContainer emulates an entire operating system process tree using WebAssembly and multi-threaded worker pools, it relies on modern browser primitives that are gated behind strict web security constraints.
+
+---
+
+### A. Required Browser Capabilities & Security Primitives
+
+WebContainer runtime execution depends on three core browser security capabilities:
+
+1. **`SharedArrayBuffer`:**
+   - Used for low-latency shared-memory IPC between the main browser thread and WebContainer WebAssembly worker threads.
+   - Following Spectre/Meltdown vulnerability mitigations, all major browser engines strictly gate `SharedArrayBuffer` access. It is **only** defined when `window.crossOriginIsolated === true`.
+2. **WebAssembly Multi-Threading & SIMD:**
+   - The WebContainer Node.js kernel is compiled to WebAssembly with thread support (`Atomics` and memory sharing).
+   - Supported in all modern Chromium, Firefox, and Safari engines that support `SharedArrayBuffer`.
+3. **Secure Context (`window.isSecureContext`):**
+   - Cross-origin isolation and WebContainers can **only** be established in a Secure Context:
+     - `https://` origins in production, staging, or previews.
+     - `http://localhost` or `http://127.0.0.1` origins in local development.
+   - Accessing Nexus via raw IP addresses over plain HTTP (e.g., `http://192.168.1.50:3000`) is **not** a secure context, meaning `crossOriginIsolated` will be `false` and WebContainer will fail to boot.
+
+---
+
+### B. Browser Compatibility Matrix
+
+| Browser Engine / Platform | Minimum Version | Support Level | Technical Notes |
+| :--- | :--- | :--- | :--- |
+| **Google Chrome / Chromium** | 96+ | **Full Support** (Recommended) | Fully supports COEP `credentialless` and `same-origin` COOP with optimal WebAssembly execution speed. |
+| **Microsoft Edge** | 96+ | **Full Support** | Chromium-based; identical compatibility and performance to Google Chrome. |
+| **Brave / Opera / Vivaldi** | Chromium 96+ | **Full Support** | In Brave, default shields do not block WebContainers on secure origins, provided headers are served. |
+| **Mozilla Firefox** | 103+ | **Full Support** | Firefox 103+ introduced full support for COEP `credentialless`. Firefox requires strict origin isolation and Secure Context. |
+| **Safari (macOS)** | 16.4+ | **Supported** | Safari 16.4+ added support for `SharedArrayBuffer` in cross-origin isolated contexts. |
+| **Safari (iOS / iPadOS)** | iOS 16.4+ | **Limited** | Requires iOS 16.4+. Memory limits on mobile devices may limit large `npm install` runs; desktop browsers are strongly recommended. |
+| **Android Chrome** | 96+ | **Supported** | Functional, though device memory constraints can impact container compilation and heavy dev servers. |
+
+---
+
+### C. HTTP Response Headers & Cross-Origin Isolation Architecture
+
+To enable `window.crossOriginIsolated` without breaking third-party assets, Nexus configures the following HTTP response headers in [`next.config.ts`](../next.config.ts):
+
+```typescript
+async headers() {
+  return [
+    {
+      source: "/:path*",
+      headers: [
+        {
+          key: "Cross-Origin-Embedder-Policy",
+          value: "credentialless",
+        },
+        {
+          key: "Cross-Origin-Opener-Policy",
+          value: "same-origin",
+        },
+      ],
+    },
+  ];
+}
+```
+
+#### Why `credentialless` instead of `require-corp`?
+- **Traditional COEP (`require-corp`):** Mandates that *every* cross-origin subresource (Google Fonts, third-party user avatars, CDN stylesheets, Clerk auth scripts, external embeds) explicitly respond with a `Cross-Origin-Resource-Policy: cross-origin` header. If an external service omits CORP, the browser blocks the subresource.
+- **Modern COEP (`credentialless`):** Allows cross-origin subresources to load without CORP headers by stripping user credentials (cookies, client certificates, HTTP authorization headers) from those requests. This achieves cross-origin isolation while preserving seamless integration with third-party auth, analytics, icons, and fonts.
+- **Runtime Hook Configuration:** The singleton WebContainer boot in `src/features/preview/hooks/use-webcontainer.ts` explicitly matches this policy:
+  ```typescript
+  WebContainer.boot({ coep: "credentialless" });
+  ```
+
+---
+
+### D. Production Deployment, CDNs, and Reverse Proxies
+
+When deploying Nexus beyond local development, hosting infrastructure and proxy layers must preserve or inject COOP/COEP headers.
+
+#### 1. Vercel Deployment
+- Next.js `headers()` configured in `next.config.ts` are automatically applied to all serverless lambdas and edge routing on Vercel.
+- Ensure no edge middleware strips response headers.
+
+#### 2. Nginx Reverse Proxy
+If deploying Next.js in a standalone Node container behind Nginx, verify that Nginx does not suppress application headers, or explicitly inject them in your `server` or `location` block:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Ensure cross-origin isolation headers are delivered to clients
+    add_header Cross-Origin-Embedder-Policy "credentialless" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+}
+```
+
+#### 3. Cloudflare (CDN / Proxy)
+- **SSL/TLS Mode:** Must be set to **Full** or **Full (Strict)**. WebContainer will fail if accessed over plain HTTP.
+- **Transform Rules / Response Headers:** If using Cloudflare Transform Rules to modify headers, ensure `Cross-Origin-Embedder-Policy` and `Cross-Origin-Opener-Policy` are never overridden or stripped.
+- **Cloudflare Rocket Loader:** May interfere with WebAssembly and worker thread initialization; test preview pages with Rocket Loader disabled if unexpected boot hangs occur.
+
+#### 4. Docker Container / Self-Hosted Node.js Server
+- When building with `output: "standalone"` or running `next start`, Next.js serves the configured headers natively.
+- When hosting behind Kubernetes Ingress (e.g. `ingress-nginx` or Traefik), ensure SSL termination is properly configured so the client receives requests over `https://`.
+
+---
+
+### E. Verification Procedures for Contributors
+
+Contributors can quickly verify that their local or deployment environment satisfies all WebContainer prerequisites:
+
+#### 1. Browser Console Verification
+Open your browser's Developer Tools (F12) Console on the Nexus project view (`/projects/[projectId]`) and run:
+
+```javascript
+console.table({
+  "Secure Context (HTTPS or localhost)": window.isSecureContext,
+  "Cross-Origin Isolated": window.crossOriginIsolated,
+  "SharedArrayBuffer Available": typeof window.SharedArrayBuffer !== "undefined",
+  "WebAssembly Supported": typeof window.WebAssembly !== "undefined",
+});
+```
+
+All four values **must evaluate to `true`**. If `Cross-Origin Isolated` or `SharedArrayBuffer Available` is `false`, WebContainer cannot start.
+
+#### 2. Network Header Inspection (`curl`)
+Verify response headers from the command line:
+
+```bash
+# Local development check
+curl -I http://localhost:3000/projects/sample-id
+
+# Production deployment check
+curl -I https://your-nexus-domain.com
+```
+
+**Expected Output Headers:**
+```http
+Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Opener-Policy: same-origin
+```
+
+---
+
+### F. Troubleshooting & Diagnostic Guide
+
+| Symptom / Error | Root Cause | Diagnostic Steps & Remediation |
+| :--- | :--- | :--- |
+| **`SharedArrayBuffer is not defined`** | Missing cross-origin isolation (`crossOriginIsolated === false`). | 1. Check `window.isSecureContext` in console.<br/>2. If on local network, use `http://localhost:3000` instead of `http://192.168.x.x:3000`.<br/>3. Verify COOP and COEP headers using `curl -I`.<br/>4. Ensure reverse proxy or CDN is not stripping headers. |
+| **Terminal blank or stuck at "Booting..."** | Previous WebContainer session not cleanly torn down, or browser lacks WebAssembly worker permissions. | 1. Click the **Restart Container** button in the preview header.<br/>2. Inspect console for WebContainer error logs.<br/>3. Clear browser cache and perform a hard refresh (`Ctrl+F5` / `Cmd+Shift+R`). |
+| **`WebContainer requires COEP: credentialless`** | Mismatch between `next.config.ts` headers and `WebContainer.boot({ coep })`. | Verify that `next.config.ts` serves `Cross-Origin-Embedder-Policy: credentialless` and `src/features/preview/hooks/use-webcontainer.ts` boots with `{ coep: "credentialless" }`. |
+| **External preview iframe refused to connect / X-Frame-Options** | Preview application attempting to load non-embeddable external URLs. | WebContainer runs a local in-browser virtual dev server. The internal preview iframe points to the WebContainer port URL. External sites embedding Nexus or being embedded inside preview must allow iframe embedding. |
+| **`Out of memory` during `npm install`** | Browser tab memory limit exceeded during heavy package dependency resolution. | 1. WebContainer runs in browser WebAssembly memory (typically capped at 2GB–4GB by browser engines).<br/>2. Avoid adding monolithic packages or native C++ add-ons requiring node-gyp compilation (WebContainer only supports pure JS/WASM packages).<br/>3. Restart container to release memory. |
+| **Clerk authentication popups blocked / closing unexpectedly** | Interaction between COOP `same-origin` and third-party OAuth popup windows. | COOP `same-origin` prevents the opener window from interacting with cross-origin popups. Clerk's modal and redirect flows are designed to work within isolated contexts. If OAuth popups detach, ensure authentication redirects flow cleanly through Clerk callback endpoints. |
+
+---
+
+### G. Code Audit Finding & Observation
+
+During our architectural audit of Nexus WebContainer integration:
+- In [`next.config.ts`](../next.config.ts), `headers()` applies COOP/COEP to all routes (`/:path*`).
+- In [`src/features/preview/hooks/use-webcontainer.ts`](../src/features/preview/hooks/use-webcontainer.ts), `WebContainer.boot({ coep: "credentialless" })` correctly coordinates with the credentialless policy.
+- In production environments where developers test on mobile devices or local network IP addresses (`http://192.168.x.x:3000`), browsers will report `window.isSecureContext === false` and disable `SharedArrayBuffer`. When testing on non-localhost physical devices, an HTTPS proxy (such as `mkcert` or `ngrok http 3000`) is required to establish a valid Secure Context.

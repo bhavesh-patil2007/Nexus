@@ -280,8 +280,14 @@ npm run build
 - **Fix:** Re-authenticate with GitHub via Clerk or re-connect GitHub under your user profile settings in the app.
 
 ### 5. WebContainer Cross-Origin Isolation Errors
-- **Cause:** WebContainer requires `SharedArrayBuffer` support via specific HTTP security headers.
-- **Fix:** Nexus already includes these in [next.config.ts](next.config.ts) (`Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin`). Ensure you are accessing the app via `http://localhost:3000` rather than raw IP addresses.
+- **Cause:** WebContainer requires `SharedArrayBuffer` and WebAssembly threads, which browsers gate behind Cross-Origin Isolation (`window.crossOriginIsolated === true`).
+- **Required Headers:** Nexus configures these in [next.config.ts](next.config.ts):
+  - `Cross-Origin-Embedder-Policy: credentialless`
+  - `Cross-Origin-Opener-Policy: same-origin`
+- **Fix / Common Traps:**
+  - Access the application via `http://localhost:3000` rather than local network IP addresses (e.g. `http://192.168.x.x:3000`). Plain HTTP over non-localhost IPs does not provide a Secure Context (`window.isSecureContext === false`).
+  - If deploying behind a reverse proxy (Nginx, Traefik, Caddy) or CDN (Cloudflare), verify that the proxy does not strip `Cross-Origin-Embedder-Policy` or `Cross-Origin-Opener-Policy` response headers, and that SSL/TLS is properly terminated (`https://`).
+  - For full browser compatibility matrices, verification commands, and diagnostic procedures, consult the [WebContainer Browser Compatibility & Deployment Guide](docs/architecture.md#9-webcontainer-browser-compatibility-and-deployment-guide).
 
 ---
 
@@ -289,6 +295,7 @@ npm run build
 
 - [Contributing Guidelines](CONTRIBUTING.md) — Branch conventions, commit style, and PR process.
 - [Architecture Guide](docs/architecture.md) — System design, message lifecycle, and background agent workflows.
+- [WebContainer Browser Compatibility & Deployment Guide](docs/architecture.md#9-webcontainer-browser-compatibility-and-deployment-guide) — Browser support matrices, cross-origin isolation, reverse-proxy setup, and troubleshooting.
 - [Convex Data Model and Mutation Lifecycle](docs/architecture.md#8-convex-data-model-and-mutation-lifecycle) — Convex schema, table reference, ownership authorization, indexes, and cascade deletion rules.
 - [API Route Reference](docs/architecture.md#7-api-route-reference) — Next.js App Router request and response contracts, authentication requirements, and error statuses.
 - [Code of Conduct](CODE_OF_CONDUCT.md)
