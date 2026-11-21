@@ -54,6 +54,7 @@ vi.mock("@/features/preview/components/preview-settings-popover", () => ({
 let mockRestart = vi.fn();
 const mockSendTerminalInput = vi.fn();
 const mockResizeTerminal = vi.fn();
+const mockInterruptForegroundProcess = vi.fn();
 let mockTerminalOutput = "";
 let mockStatus = "ready";
 let mockPreviewUrl: string | null = "http://localhost:3000";
@@ -68,6 +69,7 @@ vi.mock("@/features/preview/hooks/use-webcontainer", () => ({
     terminalOutput: mockTerminalOutput,
     sendTerminalInput: mockSendTerminalInput,
     resizeTerminal: mockResizeTerminal,
+    interruptForegroundProcess: mockInterruptForegroundProcess,
   }),
 }));
 
@@ -231,15 +233,40 @@ describe("Issue #47 — Accessible Clear-Terminal Control", () => {
     expect(mockRestart).toHaveBeenCalledTimes(1);
 
     const toggleButton = screen.getByTitle("Toggle terminal");
-    // Initially clear terminal is present
+    // Initially clear and interrupt terminal controls are present
     expect(screen.getByRole("button", { name: "Clear terminal" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Interrupt foreground process" })).toBeDefined();
 
     // Toggle off
     fireEvent.click(toggleButton);
     expect(screen.queryByRole("button", { name: "Clear terminal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Interrupt foreground process" })).toBeNull();
 
     // Toggle back on
     fireEvent.click(toggleButton);
     expect(screen.getByRole("button", { name: "Clear terminal" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Interrupt foreground process" })).toBeDefined();
+  });
+
+  // Issue #53 tests
+  it("Issue #53 — renders interrupt button with accessible name and title", () => {
+    render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+    const interruptButton = screen.getByRole("button", { name: "Interrupt foreground process" });
+    expect(interruptButton).toBeDefined();
+    expect(interruptButton.getAttribute("aria-label")).toBe("Interrupt foreground process");
+    expect(interruptButton.getAttribute("title")).toBe("Interrupt foreground process");
+  });
+
+  it("Issue #53 — clicking interrupt button invokes interruptForegroundProcess callback", () => {
+    render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+    const interruptButton = screen.getByRole("button", { name: "Interrupt foreground process" });
+    act(() => {
+      fireEvent.click(interruptButton);
+    });
+
+    expect(mockInterruptForegroundProcess).toHaveBeenCalledTimes(1);
+    expect(mockRestart).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import {
   AlertTriangleIcon,
   RefreshCwIcon,
   EraserIcon,
+  CircleStopIcon,
 } from "lucide-react";
 
 import { useWebContainer } from "@/features/preview/hooks/use-webcontainer";
@@ -33,6 +34,7 @@ export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
     terminalOutput,
     sendTerminalInput,
     resizeTerminal,
+    interruptForegroundProcess,
   } = useWebContainer({
     projectId,
     enabled: true,
@@ -124,16 +126,28 @@ export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
                     <TerminalSquareIcon className="size-3" />
                     Terminal
                   </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                    title="Clear terminal"
-                    aria-label="Clear terminal"
-                    onClick={() => clearTerminalRef.current?.()}
-                  >
-                    <EraserIcon className="size-3" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                      title="Interrupt foreground process"
+                      aria-label="Interrupt foreground process"
+                      onClick={interruptForegroundProcess}
+                    >
+                      <CircleStopIcon className="size-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                      title="Clear terminal"
+                      aria-label="Clear terminal"
+                      onClick={() => clearTerminalRef.current?.()}
+                    >
+                      <EraserIcon className="size-3" />
+                    </Button>
+                  </div>
                 </div>
                 <PreviewTerminal
                   output={terminalOutput}

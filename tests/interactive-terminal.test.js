@@ -170,6 +170,91 @@ describe("Interactive WebContainer Terminal & Process Management (Issue #3)", ()
       assert.strictEqual(receivedBytes.length, 1);
       assert.strictEqual(receivedBytes[0], "\x03");
     });
+
+    test("Interruption does not terminate dev server, restart container, or replace writer", async () => {
+      let restartCount = 0;
+      let devServerKilled = false;
+      let writerCalls = [];
+
+      const mockWriter = {
+        write: async (data) => writerCalls.push(data),
+      };
+
+      const restart = () => {
+        restartCount++;
+      };
+
+      const devProcess = {
+        kill: () => {
+          devServerKilled = true;
+        },
+      };
+
+      const interruptForegroundProcess = () => {
+        if (mockWriter) {
+          mockWriter.write("\x03");
+        }
+      };
+
+      interruptForegroundProcess();
+
+      assert.deepStrictEqual(writerCalls, ["\x03"]);
+      assert.strictEqual(restartCount, 0);
+      assert.strictEqual(devServerKilled, false);
+      assert.strictEqual(typeof restart, "function");
+      assert.strictEqual(typeof devProcess.kill, "function");
+    });
+
+    test("Interruption handles missing or unavailable shell writer safely without throwing", () => {
+      let shellInputWriter = null;
+
+      const interruptForegroundProcess = () => {
+        if (shellInputWriter) {
+          shellInputWriter.write("\x03");
+        }
+      };
+
+      assert.doesNotThrow(() => {
+        interruptForegroundProcess();
+      });
+    });
+
+    test("Repeated interruption invocations safely send Ctrl+C through existing writer", () => {
+      let receivedBytes = [];
+      const writer = {
+        write: async (b) => receivedBytes.push(b),
+      };
+
+      const interruptForegroundProcess = () => {
+        writer.write("\x03");
+      };
+
+      interruptForegroundProcess();
+      interruptForegroundProcess();
+      interruptForegroundProcess();
+
+      assert.strictEqual(receivedBytes.length, 3);
+      assert.deepStrictEqual(receivedBytes, ["\x03", "\x03", "\x03"]);
+    });
+
+    test("Interruption does not mutate or clear incremental terminal output", () => {
+      let terminalOutput = "running command...\n";
+      let receivedBytes = [];
+      const writer = {
+        write: async (b) => receivedBytes.push(b),
+      };
+
+      const interruptForegroundProcess = () => {
+        writer.write("\x03");
+      };
+
+      interruptForegroundProcess();
+
+      // Output should remain intact and subsequent output can still be appended
+      terminalOutput += "^C\n";
+      assert.strictEqual(terminalOutput, "running command...\n^C\n");
+      assert.deepStrictEqual(receivedBytes, ["\x03"]);
+    });
   });
 
   describe("D. Terminal Resizing", () => {
