@@ -22,6 +22,10 @@ export const useCreateConversation = () => {
   return useMutation(api.conversations.create);
 };
 
+export const useRenameConversation = () => {
+  return useMutation(api.conversations.rename);
+};
+
 export const useExecutionEvents = (
   conversationId: Id<"conversations"> | null,
 ) => {

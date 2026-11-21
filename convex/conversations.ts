@@ -129,3 +129,40 @@ export const getExecutionEvents = query({
       .collect();
   },
 });
+
+export const rename = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await verifyAuth(ctx);
+
+    const trimmedTitle = args.title.trim();
+    if (!trimmedTitle) {
+      throw new Error("Conversation title cannot be empty");
+    }
+
+    const conversation = await ctx.db.get("conversations", args.conversationId);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const project = await ctx.db.get("projects", conversation.projectId);
+    if (!project) {
+      throw new Error("Project not found");
+    }
+
+    if (project.ownerId !== identity.subject) {
+      throw new Error("Unauthorized to access this project");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch("conversations", args.conversationId, {
+      title: trimmedTitle,
+      updatedAt: now,
+    });
+
+    return args.conversationId;
+  },
+});
