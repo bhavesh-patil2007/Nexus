@@ -289,4 +289,5 @@ npm run build
 
 - [Contributing Guidelines](CONTRIBUTING.md) — Branch conventions, commit style, and PR process.
 - [Architecture Guide](docs/architecture.md) — System design, message lifecycle, and background agent workflows.
+- [API Route Reference](docs/architecture.md#7-api-route-reference) — Next.js App Router request and response contracts, authentication requirements, and error statuses.
 - [Code of Conduct](CODE_OF_CONDUCT.md)
