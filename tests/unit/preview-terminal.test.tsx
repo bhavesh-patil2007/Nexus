@@ -38,6 +38,16 @@ vi.mock("@xterm/addon-fit", () => {
 // Mock CSS import
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
+// Mock toast
+const mockToastSuccess = vi.fn();
+const mockToastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+  },
+}));
+
 // Mock allotment and popovers
 vi.mock("allotment", () => ({
   Allotment: Object.assign(
@@ -268,5 +278,167 @@ describe("Issue #47 — Accessible Clear-Terminal Control", () => {
 
     expect(mockInterruptForegroundProcess).toHaveBeenCalledTimes(1);
     expect(mockRestart).not.toHaveBeenCalled();
+  });
+
+  describe("Issue #76 — Preview URL Actions (Copy and Open)", () => {
+    let originalClipboard: Clipboard | undefined;
+
+    beforeEach(() => {
+      originalClipboard = navigator.clipboard;
+    });
+
+    afterEach(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: originalClipboard,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    // Rendering
+    it("renders Copy and Open controls when a valid preview URL exists", () => {
+      mockPreviewUrl = "https://preview.nexus.dev/app";
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      const openBtn = screen.getByRole("link", { name: "Open preview URL" });
+
+      expect(copyBtn).toBeDefined();
+      expect(copyBtn.getAttribute("title")).toBe("Copy preview URL");
+      expect(openBtn).toBeDefined();
+      expect(openBtn.getAttribute("title")).toBe("Open preview URL");
+    });
+
+    it("controls are unavailable when previewUrl is absent (null)", () => {
+      mockPreviewUrl = null;
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      expect(screen.queryByRole("button", { name: "Copy preview URL" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "Open preview URL" })).toBeNull();
+      expect(screen.getByText("Ready to preview")).toBeDefined();
+    });
+
+    it("controls are unavailable when previewUrl is empty string", () => {
+      mockPreviewUrl = "";
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      expect(screen.queryByRole("button", { name: "Copy preview URL" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "Open preview URL" })).toBeNull();
+    });
+
+    it("existing URL display remains rendered and preserved alongside controls", () => {
+      mockPreviewUrl = "https://preview.nexus.dev/app/test-url";
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const urlSpan = screen.getByText("https://preview.nexus.dev/app/test-url");
+      expect(urlSpan).toBeDefined();
+      expect(urlSpan.className).toContain("truncate");
+    });
+
+    // Clipboard
+    it("clicking Copy URL calls navigator.clipboard.writeText with current preview URL and shows success toast", async () => {
+      mockPreviewUrl = "https://preview.nexus.dev/myapp";
+      const writeTextMock = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: writeTextMock },
+        configurable: true,
+        writable: true,
+      });
+
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      await act(async () => {
+        fireEvent.click(copyBtn);
+      });
+
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+      expect(writeTextMock).toHaveBeenCalledWith("https://preview.nexus.dev/myapp");
+      expect(mockToastSuccess).toHaveBeenCalledWith("Preview URL copied to clipboard");
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    it("rejected clipboard operation displays error toast without crashing", async () => {
+      mockPreviewUrl = "https://preview.nexus.dev/myapp";
+      const writeTextMock = vi.fn().mockRejectedValue(new Error("Permission denied"));
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: writeTextMock },
+        configurable: true,
+        writable: true,
+      });
+
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      await act(async () => {
+        fireEvent.click(copyBtn);
+      });
+
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to copy preview URL");
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    });
+
+    it("missing clipboard support displays error feedback without crashing", async () => {
+      mockPreviewUrl = "https://preview.nexus.dev/myapp";
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        configurable: true,
+        writable: true,
+      });
+
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      await act(async () => {
+        fireEvent.click(copyBtn);
+      });
+
+      expect(mockToastError).toHaveBeenCalledWith("Failed to copy preview URL");
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    });
+
+    // Opening
+    it("open control has safe external link attributes (target='_blank' and rel='noopener noreferrer')", () => {
+      mockPreviewUrl = "https://preview.nexus.dev/site";
+      render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      const openLink = screen.getByRole("link", { name: "Open preview URL" });
+      expect(openLink.getAttribute("href")).toBe("https://preview.nexus.dev/site");
+      expect(openLink.getAttribute("target")).toBe("_blank");
+      expect(openLink.getAttribute("rel")).toBe("noopener noreferrer");
+    });
+
+    // Reactivity
+    it("uses updated preview URL when URL changes after restart", async () => {
+      mockPreviewUrl = "https://preview-1.nexus.dev";
+      const writeTextMock = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: writeTextMock },
+        configurable: true,
+        writable: true,
+      });
+
+      const { rerender } = render(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      let copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      let openLink = screen.getByRole("link", { name: "Open preview URL" });
+      expect(openLink.getAttribute("href")).toBe("https://preview-1.nexus.dev");
+
+      // Update URL to new port/host
+      mockPreviewUrl = "https://preview-2.nexus.dev";
+      rerender(<PreviewView projectId={"proj_1" as Id<"projects">} />);
+
+      copyBtn = screen.getByRole("button", { name: "Copy preview URL" });
+      openLink = screen.getByRole("link", { name: "Open preview URL" });
+      expect(openLink.getAttribute("href")).toBe("https://preview-2.nexus.dev");
+
+      await act(async () => {
+        fireEvent.click(copyBtn);
+      });
+
+      expect(writeTextMock).toHaveBeenCalledWith("https://preview-2.nexus.dev");
+      expect(mockToastSuccess).toHaveBeenCalledWith("Preview URL copied to clipboard");
+    });
   });
 });
