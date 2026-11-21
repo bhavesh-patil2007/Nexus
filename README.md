@@ -221,11 +221,26 @@ Starts the Next.js frontend and App Router API at [http://localhost:3000](http:/
 
 ## 🧪 Testing and Quality Checks
 
-Verify code quality and test coverage using the following repository scripts:
+Nexus maintains two distinct testing suites to verify code quality and protect against regressions:
+
+### 1. Vitest Unit Test Suite (`npm test`)
+Covers modular unit tests located under `tests/unit/**/*.test.{ts,tsx}` (e.g. React component accessibility, parser utilities, and API schemas).
+```bash
+npm test
+```
+
+### 2. Standalone Node Regression Test Suite (`npm run test:regression`)
+Covers end-to-end subsystem integration and security regression tests located in `tests/*.test.js` using Node's built-in `node:test` runner. These tests verify critical asynchronous workflows such as cancellation authorization, dirty tab conflict detection, execution progress tracking, GitHub import/export batching, and interactive WebContainer terminal lifecycles.
+```bash
+npm run test:regression
+```
+
+### Complete Verification Sequence
+Contributors should run the full verification pipeline before submitting changes:
 
 ```bash
-# Run automated unit test suite with Vitest
-npm test
+# Run all unit and standalone regression tests
+npm run test:all
 
 # Run TypeScript compilation and typecheck
 npm run typecheck
@@ -236,6 +251,9 @@ npm run lint
 # Build production application
 npm run build
 ```
+
+> [!NOTE]
+> All test commands are cross-platform compatible and work identically across Windows PowerShell, Windows Command Prompt, macOS, and Linux. For detailed documentation on test classifications and special-runtime test suites, see [CONTRIBUTING.md](CONTRIBUTING.md) and [tests/README.md](tests/README.md).
 
 ---
 
