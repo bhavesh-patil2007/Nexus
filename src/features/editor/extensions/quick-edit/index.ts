@@ -5,9 +5,6 @@ import { fetcher } from "./fetcher";
 
 export const showQuickEditEffect = StateEffect.define<boolean>();
 
-let editorView: EditorView | null = null;
-let currentAbortController: AbortController | null = null;
-
 export const quickEditState = StateField.define<boolean>({
   create() {
     return false;
@@ -26,7 +23,7 @@ export const quickEditState = StateField.define<boolean>({
       }
     }
     return value;
-  }
+  },
 });
 
 const createQuickEditTooltip = (state: EditorState): readonly Tooltip[] => {
@@ -46,7 +43,10 @@ const createQuickEditTooltip = (state: EditorState): readonly Tooltip[] => {
       pos: selection.to,
       above: false,
       strictSide: false,
-      create() {
+      create(view: EditorView) {
+        let currentAbortController: AbortController | null = null;
+        let isSubmitting = false;
+
         const dom = document.createElement("div");
         dom.className =
           "bg-popover text-popover-foreground z-50 rounded-sm border border-input p-2 shadow-md flex flex-col gap-2 text-sm";
@@ -74,12 +74,10 @@ const createQuickEditTooltip = (state: EditorState): readonly Tooltip[] => {
             currentAbortController.abort();
             currentAbortController = null;
           }
-          if (editorView) {
-            editorView.dispatch({
-              effects: showQuickEditEffect.of(false),
-            });
-          }
-        }
+          view.dispatch({
+            effects: showQuickEditEffect.of(false),
+          });
+        };
 
         const submitButton = document.createElement("button");
         submitButton.type = "submit";
@@ -90,47 +88,73 @@ const createQuickEditTooltip = (state: EditorState): readonly Tooltip[] => {
         form.onsubmit = async (e) => {
           e.preventDefault();
 
-          if (!editorView) return;
+          if (isSubmitting) return;
 
           const instruction = input.value.trim();
           if (!instruction) return;
 
-          const selection = editorView.state.selection.main;
-          const selectedCode = editorView.state.doc.sliceString(
-            selection.from,
-            selection.to
-          );
-          const fullCode = editorView.state.doc.toString();
+          const currentSelection = view.state.selection.main;
+          if (currentSelection.empty) return;
 
+          const selectedCode = view.state.doc.sliceString(
+            currentSelection.from,
+            currentSelection.to
+          );
+          const fullCode = view.state.doc.toString();
+
+          isSubmitting = true;
           submitButton.disabled = true;
           submitButton.textContent = "Editing...";
 
-          currentAbortController = new AbortController();
-          const editedCode = await fetcher(
-            {
-              selectedCode,
-              fullCode,
-              instruction,
-            },
-            currentAbortController.signal
-          );
+          const abortController = new AbortController();
+          currentAbortController = abortController;
 
-          if (editedCode) {
-            editorView.dispatch({
-              changes: {
-                from: selection.from,
-                to: selection.to,
-                insert: editedCode,
+          try {
+            const editedCode = await fetcher(
+              {
+                selectedCode,
+                fullCode,
+                instruction,
               },
-              selection: { anchor: selection.from + editedCode.length },
-              effects: showQuickEditEffect.of(false),
-            });
-          } else {
-            submitButton.disabled = false;
-            submitButton.textContent = "Submit";
-          }
+              abortController.signal
+            );
 
-          currentAbortController = null;
+            if (abortController.signal.aborted) {
+              return;
+            }
+
+            if (editedCode) {
+              // Ensure selection bounds are still valid within doc length
+              const docLength = view.state.doc.length;
+              if (
+                currentSelection.from <= docLength &&
+                currentSelection.to <= docLength
+              ) {
+                view.dispatch({
+                  changes: {
+                    from: currentSelection.from,
+                    to: currentSelection.to,
+                    insert: editedCode,
+                  },
+                  selection: { anchor: currentSelection.from + editedCode.length },
+                  effects: showQuickEditEffect.of(false),
+                });
+              }
+            } else {
+              submitButton.disabled = false;
+              submitButton.textContent = "Submit";
+            }
+          } catch {
+            if (!abortController.signal.aborted) {
+              submitButton.disabled = false;
+              submitButton.textContent = "Submit";
+            }
+          } finally {
+            if (currentAbortController === abortController) {
+              currentAbortController = null;
+            }
+            isSubmitting = false;
+          }
         };
 
         buttonContainer.appendChild(cancelButton);
@@ -145,7 +169,15 @@ const createQuickEditTooltip = (state: EditorState): readonly Tooltip[] => {
           input.focus();
         }, 0);
 
-        return { dom };
+        return {
+          dom,
+          destroy() {
+            if (currentAbortController) {
+              currentAbortController.abort();
+              currentAbortController = null;
+            }
+          },
+        };
       },
     },
   ];
@@ -190,13 +222,8 @@ const quickEditKeymap = keymap.of([
   },
 ]);
 
-const captureViewExtension = EditorView.updateListener.of((update) => {
-  editorView = update.view;
-});
-
-export const quickEdit = (fileName: string) => [
+export const quickEdit = (_fileName: string) => [
   quickEditState,
   quickEditTooltipField,
   quickEditKeymap,
-  captureViewExtension,
 ];

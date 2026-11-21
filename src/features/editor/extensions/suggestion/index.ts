@@ -15,6 +15,9 @@ import { fetcher } from "./fetcher";
 // We define one effect type for setting the suggestion text.
 const setSuggestionEffect = StateEffect.define<string | null>();
 
+// StateEffect for setting the waiting status per editor view
+const setWaitingEffect = StateEffect.define<boolean>();
+
 // StateField: Holds our suggestion state in the editor.
 // - create(): Returns the initial value when the editor loads
 // - update(): Called on every transaction (keystroke, etc.) to potentially update the value
@@ -28,6 +31,18 @@ const suggestionState = StateField.define<string | null>({
     // Otherwise, keep the current value unchanged
     for (const effect of transaction.effects)
       if (effect.is(setSuggestionEffect)) return effect.value;
+
+    return value;
+  },
+});
+
+const isWaitingState = StateField.define<boolean>({
+  create() {
+    return false;
+  },
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(setWaitingEffect)) return effect.value;
 
     return value;
   },
@@ -49,10 +64,7 @@ class SuggestionWidget extends WidgetType {
   }
 }
 
-let debounceTimer: number | null = null;
-let isWaitingForSuggestion = false;
 const DEBOUNCE_DELAY = 300;
-let currentAbortController: AbortController | null = null;
 
 const generatePayload = (view: EditorView, fileName: string) => {
   const code = view.state.doc.toString();
@@ -90,6 +102,12 @@ const generatePayload = (view: EditorView, fileName: string) => {
 const createDebouncePlugin = (fileName: string) => {
   return ViewPlugin.fromClass(
     class {
+      private debounceTimer: number | null = null;
+      private currentAbortController: AbortController | null = null;
+      private requestId = 0;
+      private destroyed = false;
+      public isWaiting = false;
+
       constructor(view: EditorView) {
         this.triggerSuggestion(view);
       }
@@ -100,42 +118,110 @@ const createDebouncePlugin = (fileName: string) => {
       }
 
       triggerSuggestion(view: EditorView) {
-        if (debounceTimer !== null) clearTimeout(debounceTimer);
+        if (this.destroyed) return;
 
-        if (currentAbortController !== null) currentAbortController.abort();
+        if (this.debounceTimer !== null) {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = null;
+        }
 
-        isWaitingForSuggestion = true;
+        if (this.currentAbortController !== null) {
+          this.currentAbortController.abort();
+          this.currentAbortController = null;
+        }
 
-        debounceTimer = window.setTimeout(async () => {
-          const payload = generatePayload(view, fileName);
-          if (!payload) {
-            isWaitingForSuggestion = false;
-            view.dispatch({ effects: setSuggestionEffect.of(null) });
+        const currentRequestId = ++this.requestId;
+        this.isWaiting = true;
+
+        this.debounceTimer = window.setTimeout(async () => {
+          if (this.destroyed || this.requestId !== currentRequestId) {
             return;
           }
-          currentAbortController = new AbortController();
-          const suggestion = await fetcher(
-            payload,
-            currentAbortController.signal,
-          );
 
-          isWaitingForSuggestion = false;
-          view.dispatch({
-            effects: setSuggestionEffect.of(suggestion),
-          });
+          const payload = generatePayload(view, fileName);
+          if (!payload) {
+            this.isWaiting = false;
+            if (!this.destroyed && this.requestId === currentRequestId) {
+              view.dispatch({
+                effects: [
+                  setWaitingEffect.of(false),
+                  setSuggestionEffect.of(null),
+                ],
+              });
+            }
+            return;
+          }
+
+          const abortController = new AbortController();
+          this.currentAbortController = abortController;
+
+          try {
+            const suggestion = await fetcher(
+              payload,
+              abortController.signal,
+            );
+
+            if (
+              this.destroyed ||
+              this.requestId !== currentRequestId ||
+              abortController.signal.aborted
+            ) {
+              return;
+            }
+
+            this.isWaiting = false;
+
+            // Ensure document hasn't changed under us if payload code doesn't match
+            if (view.state.doc.toString() !== payload.code) {
+              view.dispatch({
+                effects: setWaitingEffect.of(false),
+              });
+              return;
+            }
+
+            view.dispatch({
+              effects: [
+                setWaitingEffect.of(false),
+                setSuggestionEffect.of(suggestion),
+              ],
+            });
+          } catch {
+            this.isWaiting = false;
+            if (!this.destroyed && this.requestId === currentRequestId) {
+              view.dispatch({
+                effects: setWaitingEffect.of(false),
+              });
+            }
+          } finally {
+            if (this.currentAbortController === abortController) {
+              this.currentAbortController = null;
+            }
+          }
         }, DEBOUNCE_DELAY);
       }
 
       destroy() {
-        if (debounceTimer !== null) clearTimeout(debounceTimer);
+        this.destroyed = true;
+        this.requestId++;
+        this.isWaiting = false;
 
-        if (currentAbortController !== null) currentAbortController.abort();
+        if (this.debounceTimer !== null) {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = null;
+        }
+
+        if (this.currentAbortController !== null) {
+          this.currentAbortController.abort();
+          this.currentAbortController = null;
+        }
       }
     },
   );
 };
 
-const renderPlugin = ViewPlugin.fromClass(
+type DebouncePluginType = ReturnType<typeof createDebouncePlugin>;
+
+const renderPlugin = (debouncePlugin: DebouncePluginType) => ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
 
@@ -144,25 +230,26 @@ const renderPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      // Rebuild decorations if doc changed, cursor moved, or suggestion changed
-      const suggestionChanged = update.transactions.some((transaction) => {
+      // Rebuild decorations if doc changed, cursor moved, or suggestion/waiting state changed
+      const stateChanged = update.transactions.some((transaction) => {
         return transaction.effects.some((effect) => {
-          return effect.is(setSuggestionEffect);
+          return effect.is(setSuggestionEffect) || effect.is(setWaitingEffect);
         });
       });
 
-      // Rebuild decorations if doc changed, cursor moved, or suggestion changed
       const shouldRebuild =
-        update.docChanged || update.selectionSet || suggestionChanged;
+        update.docChanged || update.selectionSet || stateChanged;
 
       if (shouldRebuild) this.decorations = this.build(update.view);
     }
 
     build(view: EditorView) {
-      if (isWaitingForSuggestion) return Decoration.none;
+      const plugin = view.plugin(debouncePlugin);
+      if (plugin?.isWaiting) return Decoration.none;
+      if (view.state.field(isWaitingState, false)) return Decoration.none;
 
       // Get current suggestion from state
-      const suggestion = view.state.field(suggestionState);
+      const suggestion = view.state.field(suggestionState, false);
       if (!suggestion) return Decoration.none;
 
       // Create a widget decoration at the cursor position
@@ -198,9 +285,13 @@ const acceptSuggestionKeymap = keymap.of([
   },
 ]);
 
-export const suggestion = (fileName: string) => [
-  suggestionState, // Our state storage
-  createDebouncePlugin(fileName), // Triggers suggestions on typing
-  renderPlugin, // Renders the ghost text
-  acceptSuggestionKeymap, // Tab to accept
-];
+export const suggestion = (fileName: string) => {
+  const debouncePlugin = createDebouncePlugin(fileName);
+  return [
+    suggestionState, // Our state storage
+    isWaitingState, // View-isolated waiting state
+    debouncePlugin, // Triggers suggestions on typing
+    renderPlugin(debouncePlugin), // Renders the ghost text
+    acceptSuggestionKeymap, // Tab to accept
+  ];
+};
