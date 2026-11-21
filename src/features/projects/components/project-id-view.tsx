@@ -1,14 +1,26 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Allotment } from "allotment";
+import { FileIcon } from "@react-symbols/icons/utils";
 
 import { cn } from "@/lib/utils";
 import { EditorView } from "@/features/editor/components/editor-view";
+import { useEditor } from "@/features/editor/hooks/use-editor";
+import { useFiles } from "@/features/projects/hooks/use-files";
+import { getFilePath } from "@/features/preview/utils/file-tree";
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 import { FileExplorer } from "./file-explorer";
 import { PreviewView } from "./preview-view";
-import { Id } from "../../../../convex/_generated/dataModel";
+import { Doc, Id } from "../../../../convex/_generated/dataModel";
 import { ExportPopover } from "./export-popover";
 
 const MIN_SIDEBAR_WIDTH = 200;
@@ -49,8 +61,83 @@ const Tab = ({
 
 export const ProjectIdView = ({ projectId }: { projectId: Id<"projects"> }) => {
   const [activeView, setActiveView] = useState<"editor" | "preview">("editor");
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [prevProjectId, setPrevProjectId] = useState(projectId);
+
   const editorTabRef = useRef<HTMLDivElement | null>(null);
   const previewTabRef = useRef<HTMLDivElement | null>(null);
+
+  const { openFile } = useEditor(projectId);
+  const files = useFiles(projectId);
+
+  // Close and reset quick open when projectId changes during render (recommended by React docs over useEffect)
+  if (projectId !== prevProjectId) {
+    setPrevProjectId(projectId);
+    setQuickOpen(false);
+    setSearchQuery("");
+  }
+
+  // Keyboard shortcut: Ctrl+P / Cmd+P to toggle quick open
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        // Protect input fields, textareas, contenteditable elements, and CodeMirror editors
+        const target = e.target;
+        if (target && target instanceof Element) {
+          const tagName = target.tagName;
+          if (
+            tagName === "INPUT" ||
+            tagName === "TEXTAREA" ||
+            tagName === "SELECT" ||
+            (target as HTMLElement).isContentEditable ||
+            target.closest(".cm-editor") !== null ||
+            target.closest(".cm-content") !== null ||
+            target.closest("[contenteditable='true']") !== null
+          ) {
+            return;
+          }
+        }
+
+        // Prevent browser print dialog
+        e.preventDefault();
+        setQuickOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  // Compute file paths for search and display
+  const fileItems = useMemo(() => {
+    if (!files) return null;
+
+    const filesMap = new Map<Id<"files">, Doc<"files">>(
+      files.map((f) => [f._id, f])
+    );
+
+    return files
+      .filter((item) => item.type === "file")
+      .map((item) => {
+        const path = getFilePath(item, filesMap);
+        return {
+          id: item._id,
+          name: item.name,
+          path,
+          searchValue: `${path} ${item.name}`,
+        };
+      })
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }, [files]);
+
+  const handleSelectFile = (fileId: Id<"files">) => {
+    openFile(fileId, { pinned: false });
+    setQuickOpen(false);
+    setSearchQuery("");
+  };
 
   const views: Array<"editor" | "preview"> = ["editor", "preview"];
 
@@ -153,6 +240,51 @@ export const ProjectIdView = ({ projectId }: { projectId: Id<"projects"> }) => {
           <PreviewView projectId={projectId} />
         </div>
       </div>
+
+      <CommandDialog
+        open={quickOpen}
+        onOpenChange={(open) => {
+          setQuickOpen(open);
+          if (!open) setSearchQuery("");
+        }}
+        title="Quick Open"
+        description="Search files by name or path"
+      >
+        <CommandInput
+          placeholder="Search files by name or path..."
+          value={searchQuery}
+          onValueChange={setSearchQuery}
+        />
+        <CommandList>
+          {fileItems === null ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">
+              Loading files...
+            </div>
+          ) : fileItems.length === 0 ? (
+            <CommandEmpty>No files in project.</CommandEmpty>
+          ) : (
+            <>
+              <CommandEmpty>No matching files found.</CommandEmpty>
+              <CommandGroup heading="Files">
+                {fileItems.map((file) => (
+                  <CommandItem
+                    key={file.id}
+                    value={file.searchValue}
+                    onSelect={() => handleSelectFile(file.id)}
+                    className="flex items-center gap-2"
+                  >
+                    <FileIcon fileName={file.name} autoAssign className="size-4 shrink-0" />
+                    <div className="flex items-baseline gap-2 overflow-hidden truncate">
+                      <span className="font-medium text-sm truncate">{file.name}</span>
+                      <span className="text-xs text-muted-foreground truncate">{file.path}</span>
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
+        </CommandList>
+      </CommandDialog>
     </div>
   );
 };

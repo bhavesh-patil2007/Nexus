@@ -1,7 +1,18 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+
+// Polyfill ResizeObserver and scrollIntoView for jsdom (needed by Radix / cmdk)
+global.ResizeObserver = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
+if (typeof window !== "undefined") {
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+}
 
 // Mock convex file hooks
 const mockFiles: Record<string, { _id: string; name: string }> = {
@@ -10,8 +21,17 @@ const mockFiles: Record<string, { _id: string; name: string }> = {
   file_3: { _id: "file_3", name: "styles.css" },
 };
 
+let mockProjectFilesList: Array<{
+  _id: string;
+  name: string;
+  type: "file" | "folder";
+  parentId?: string;
+  projectId: string;
+}> | undefined = [];
+
 vi.mock("@/features/projects/hooks/use-files", () => ({
   useFile: (fileId: string) => mockFiles[fileId] || undefined,
+  useFiles: () => mockProjectFilesList,
 }));
 
 // Mock useEditor hook
@@ -64,6 +84,7 @@ describe("TopNavigation close button accessibility & behavior (Issue #22)", () =
     vi.clearAllMocks();
     mockOpenTabs = ["file_1", "file_2"];
     mockActiveTabId = "file_1";
+    mockProjectFilesList = [];
   });
 
   it("Test 1 — Accessible name uses the file name for App.tsx", () => {
@@ -163,6 +184,7 @@ describe("Issue #45 — Open-File Tabs Accessibility & Keyboard Navigation", () 
     vi.clearAllMocks();
     mockOpenTabs = ["file_1", "file_2", "file_3"];
     mockActiveTabId = "file_1";
+    mockProjectFilesList = [];
   });
 
   // A. Open-file tab semantics
@@ -359,6 +381,11 @@ describe("Issue #45 — Open-File Tabs Accessibility & Keyboard Navigation", () 
 });
 
 describe("Issue #45 — Code / Preview Tab Accessibility & Keyboard Navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProjectFilesList = [];
+  });
+
   it("C1. exposes role='tablist' with Code and Preview tabs", () => {
     render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
     const tablist = screen.getByRole("tablist", { name: "Project views" });
@@ -420,5 +447,221 @@ describe("Issue #45 — Code / Preview Tab Accessibility & Keyboard Navigation",
     expect(codeTab.getAttribute("aria-selected")).toBe("true");
     expect(codeTab.getAttribute("tabindex")).toBe("0");
     expect(previewTab.getAttribute("aria-selected")).toBe("false");
+  });
+});
+
+describe("Issue #65 — Ctrl/Cmd+P File Quick-Open Dialog", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProjectFilesList = [
+      {
+        _id: "f_root",
+        name: "README.md",
+        type: "file",
+        projectId: "proj_123",
+      },
+      {
+        _id: "folder_src",
+        name: "src",
+        type: "folder",
+        projectId: "proj_123",
+      },
+      {
+        _id: "f_nested",
+        name: "button.tsx",
+        type: "file",
+        parentId: "folder_src",
+        projectId: "proj_123",
+      },
+      {
+        _id: "folder_components",
+        name: "components",
+        type: "folder",
+        parentId: "folder_src",
+        projectId: "proj_123",
+      },
+      {
+        _id: "f_deep_button",
+        name: "button.tsx",
+        type: "file",
+        parentId: "folder_components",
+        projectId: "proj_123",
+      },
+    ];
+  });
+
+  // A. Keyboard shortcut triggering
+  it("opens quick-open dialog on Ctrl+P and prevents default browser action", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "p",
+      ctrlKey: true,
+      cancelable: true,
+      bubbles: true,
+    });
+    const preventDefaultSpy = vi.spyOn(event, "preventDefault");
+
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(preventDefaultSpy).toHaveBeenCalled();
+    expect(screen.getByPlaceholderText("Search files by name or path...")).toBeDefined();
+  });
+
+  it("opens quick-open dialog on Cmd+P (metaKey) on macOS", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "p",
+      metaKey: true,
+      cancelable: true,
+      bubbles: true,
+    });
+
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(screen.getByPlaceholderText("Search files by name or path...")).toBeDefined();
+  });
+
+  it("does not open quick-open when typing in an input or textarea", () => {
+    render(
+      <div>
+        <ProjectIdView projectId={"proj_123" as Id<"projects">} />
+        <input data-testid="active-input" />
+        <textarea data-testid="active-textarea" />
+      </div>
+    );
+
+    const input = screen.getByTestId("active-input");
+    fireEvent.keyDown(input, { key: "p", ctrlKey: true });
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+
+    const textarea = screen.getByTestId("active-textarea");
+    fireEvent.keyDown(textarea, { key: "p", metaKey: true });
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+  });
+
+  it("does not open quick-open when focus is inside a CodeMirror editor surface", () => {
+    render(
+      <div>
+        <ProjectIdView projectId={"proj_123" as Id<"projects">} />
+        <div className="cm-editor">
+          <div className="cm-content" data-testid="editor-surface">
+            code
+          </div>
+        </div>
+      </div>
+    );
+
+    const surface = screen.getByTestId("editor-surface");
+    fireEvent.keyDown(surface, { key: "p", ctrlKey: true });
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+  });
+
+  it("does not trigger for unrelated keys like Ctrl+O or plain 'p'", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    fireEvent.keyDown(window, { key: "p" });
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+  });
+
+  // B. Dialog rendering and content
+  it("renders files and excludes folders", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    // File names should be visible
+    expect(screen.getAllByText("README.md").length).toBeGreaterThanOrEqual(1);
+    // Folders ("src" or "components") should not be selectable command items on their own
+    expect(screen.queryByRole("option", { name: /^src$/ })).toBeNull();
+  });
+
+  it("displays loading state when files are still loading (undefined)", () => {
+    mockProjectFilesList = undefined;
+
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    expect(screen.getByText("Loading files...")).toBeDefined();
+  });
+
+  it("displays empty project state when project has no files", () => {
+    mockProjectFilesList = [];
+
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    expect(screen.getByText("No files in project.")).toBeDefined();
+  });
+
+  // C. Search and duplicate file resolution
+  it("distinguishes duplicate file names via workspace-relative paths", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    // Both button.tsx should be listed with their paths
+    expect(screen.getByText("src/button.tsx")).toBeDefined();
+    expect(screen.getByText("src/components/button.tsx")).toBeDefined();
+  });
+
+  // D. File selection and editor integration
+  it("opens selected file as an unpinned preview tab and closes dialog", async () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    const readmeItem = screen.getAllByText("README.md")[0].closest("[role='option']");
+    expect(readmeItem).not.toBeNull();
+
+    act(() => {
+      fireEvent.click(readmeItem!);
+    });
+
+    expect(mockOpenFile).toHaveBeenCalledTimes(1);
+    expect(mockOpenFile).toHaveBeenCalledWith("f_root", { pinned: false });
+
+    // Dialog should close
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+    });
+  });
+
+  // E. Project switching lifecycle
+  it("resets and closes quick-open when projectId prop changes", () => {
+    const { rerender } = render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true }));
+    });
+
+    expect(screen.getByPlaceholderText("Search files by name or path...")).toBeDefined();
+
+    // Switch project
+    rerender(<ProjectIdView projectId={"proj_456" as Id<"projects">} />);
+
+    expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
   });
 });
