@@ -28,7 +28,16 @@ export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
 
   const activeFile = useFile(activeTabId);
   const updateFile = useUpdateFile();
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const autosaveTimersRef = useRef<Map<Id<"files">, NodeJS.Timeout>>(new Map());
+
+  // Cleanup all pending autosave timers on unmount or project change
+  useEffect(() => {
+    const timers = autosaveTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, [projectId]);
 
   // Browser navigation and close protection (beforeunload)
   useEffect(() => {
@@ -66,9 +75,10 @@ export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
   // Immediate save implementation (used by debounce and manual shortcut Ctrl+S / Cmd+S)
   const performSave = useCallback(
     async (fileId: Id<"files">) => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      const existingTimer = autosaveTimersRef.current.get(fileId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        autosaveTimersRef.current.delete(fileId);
       }
 
       const contentToSave = markSavingStart(fileId);
@@ -96,15 +106,20 @@ export const EditorView = ({ projectId }: { projectId: Id<"projects"> }) => {
     (newContent: string) => {
       if (!activeTabId) return;
 
-      updateBuffer(activeTabId, newContent);
+      const fileId = activeTabId;
+      updateBuffer(fileId, newContent);
 
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
+      const existingTimer = autosaveTimersRef.current.get(fileId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
       }
 
-      timeoutRef.current = setTimeout(() => {
-        performSave(activeTabId);
+      const timer = setTimeout(() => {
+        autosaveTimersRef.current.delete(fileId);
+        performSave(fileId);
       }, DEBOUNCE_MS);
+
+      autosaveTimersRef.current.set(fileId, timer);
     },
     [activeTabId, updateBuffer, performSave]
   );
