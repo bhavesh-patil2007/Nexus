@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock convex file hooks
 const mockFiles: Record<string, { _id: string; name: string }> = {
   file_1: { _id: "file_1", name: "App.tsx" },
   file_2: { _id: "file_2", name: "index.ts" },
+  file_3: { _id: "file_3", name: "styles.css" },
 };
 
 vi.mock("@/features/projects/hooks/use-files", () => ({
@@ -34,10 +35,31 @@ vi.mock("@/features/editor/hooks/use-editor", () => ({
   }),
 }));
 
+// Mock child views in ProjectIdView
+vi.mock("@/features/projects/components/file-explorer", () => ({
+  FileExplorer: () => <div data-testid="file-explorer" />,
+}));
+vi.mock("@/features/editor/components/editor-view", () => ({
+  EditorView: () => <div data-testid="editor-view" />,
+}));
+vi.mock("@/features/projects/components/preview-view", () => ({
+  PreviewView: () => <div data-testid="preview-view" />,
+}));
+vi.mock("@/features/projects/components/export-popover", () => ({
+  ExportPopover: () => <div data-testid="export-popover" />,
+}));
+vi.mock("allotment", () => ({
+  Allotment: Object.assign(
+    ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    { Pane: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }
+  ),
+}));
+
 import { TopNavigation } from "@/features/editor/components/top-navigation";
+import { ProjectIdView } from "@/features/projects/components/project-id-view";
 import { Id } from "@/../convex/_generated/dataModel";
 
-describe("TopNavigation close button accessibility & behavior", () => {
+describe("TopNavigation close button accessibility & behavior (Issue #22)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOpenTabs = ["file_1", "file_2"];
@@ -85,7 +107,6 @@ describe("TopNavigation close button accessibility & behavior", () => {
 
     expect(mockCloseTab).toHaveBeenCalledTimes(1);
     expect(mockCloseTab).toHaveBeenCalledWith("file_2");
-    // Verify stopPropagation prevented parent tab click
     expect(mockSetActiveTab).not.toHaveBeenCalled();
   });
 
@@ -134,5 +155,270 @@ describe("TopNavigation close button accessibility & behavior", () => {
     expect(preventDefaultSpy).toHaveBeenCalled();
     expect(stopPropagationSpy).toHaveBeenCalled();
     expect(mockCloseTab).toHaveBeenCalledWith("file_1");
+  });
+});
+
+describe("Issue #45 — Open-File Tabs Accessibility & Keyboard Navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOpenTabs = ["file_1", "file_2", "file_3"];
+    mockActiveTabId = "file_1";
+  });
+
+  // A. Open-file tab semantics
+  it("A1. renders container with role='tablist' and accessible label", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tablist = screen.getByRole("tablist", { name: "Open files" });
+    expect(tablist).toBeDefined();
+  });
+
+  it("A2. renders each open file with role='tab' and correct aria-selected & roving tabindex", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.length).toBe(3);
+
+    // Active tab (file_1)
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(tabs[0].getAttribute("tabindex")).toBe("0");
+
+    // Inactive tabs (file_2, file_3)
+    expect(tabs[1].getAttribute("aria-selected")).toBe("false");
+    expect(tabs[1].getAttribute("tabindex")).toBe("-1");
+    expect(tabs[2].getAttribute("aria-selected")).toBe("false");
+    expect(tabs[2].getAttribute("tabindex")).toBe("-1");
+  });
+
+  // B. Keyboard navigation (ArrowRight, ArrowLeft, Home, End, wrapping)
+  it("B1. moves focus to the next tab on ArrowRight and wraps around", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    tabs[0].focus();
+    expect(document.activeElement).toBe(tabs[0]);
+
+    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[1]);
+
+    fireEvent.keyDown(tabs[1], { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[2]);
+
+    // Wrap around to first tab
+    fireEvent.keyDown(tabs[2], { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it("B2. moves focus to the previous tab on ArrowLeft and wraps around", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    tabs[0].focus();
+    // Wrap backwards from first to last tab
+    fireEvent.keyDown(tabs[0], { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tabs[2]);
+
+    fireEvent.keyDown(tabs[2], { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tabs[1]);
+  });
+
+  it("B3. moves focus to first tab on Home and last tab on End", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    tabs[1].focus();
+    fireEvent.keyDown(tabs[1], { key: "End" });
+    expect(document.activeElement).toBe(tabs[2]);
+
+    fireEvent.keyDown(tabs[2], { key: "Home" });
+    expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it("B4. activates focused tab on Enter or Space", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    fireEvent.keyDown(tabs[1], { key: "Enter" });
+    expect(mockSetActiveTab).toHaveBeenCalledWith("file_2");
+
+    fireEvent.keyDown(tabs[2], { key: " " });
+    expect(mockSetActiveTab).toHaveBeenCalledWith("file_3");
+  });
+
+  it("B5. handles single tab navigation gracefully without errors", () => {
+    mockOpenTabs = ["file_1"];
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tab = screen.getByRole("tab");
+
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab);
+
+    fireEvent.keyDown(tab, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tab);
+  });
+
+  it("B6. handles empty tablist without throwing errors", () => {
+    mockOpenTabs = [];
+    mockActiveTabId = null;
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tablist = screen.getByRole("tablist", { name: "Open files" });
+    expect(tablist).toBeDefined();
+    expect(screen.queryAllByRole("tab").length).toBe(0);
+  });
+
+  // D. Ctrl+W / Cmd+W shortcut to close active tab
+  it("D1. closes active tab on Ctrl+W", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+    });
+
+    expect(mockCloseTab).toHaveBeenCalledTimes(1);
+    expect(mockCloseTab).toHaveBeenCalledWith("file_1");
+  });
+
+  it("D2. closes active tab on Cmd+W (metaKey)", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "w", metaKey: true });
+    });
+
+    expect(mockCloseTab).toHaveBeenCalledTimes(1);
+    expect(mockCloseTab).toHaveBeenCalledWith("file_1");
+  });
+
+  it("D3. does not close when no active tab exists", () => {
+    mockActiveTabId = null;
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+    });
+
+    expect(mockCloseTab).not.toHaveBeenCalled();
+  });
+
+  // E. Editing context protection
+  it("E1. protects input, textarea, and contenteditable elements from Ctrl+W / Cmd+W", () => {
+    render(
+      <div>
+        <TopNavigation projectId={"proj_123" as Id<"projects">} />
+        <input data-testid="test-input" />
+        <textarea data-testid="test-textarea" />
+        <div data-testid="test-contenteditable" contentEditable="true" />
+      </div>
+    );
+
+    const input = screen.getByTestId("test-input");
+    fireEvent.keyDown(input, { key: "w", ctrlKey: true });
+    expect(mockCloseTab).not.toHaveBeenCalled();
+
+    const textarea = screen.getByTestId("test-textarea");
+    fireEvent.keyDown(textarea, { key: "w", metaKey: true });
+    expect(mockCloseTab).not.toHaveBeenCalled();
+
+    const editable = screen.getByTestId("test-contenteditable");
+    fireEvent.keyDown(editable, { key: "w", ctrlKey: true });
+    expect(mockCloseTab).not.toHaveBeenCalled();
+  });
+
+  it("E2. protects CodeMirror editor surfaces (.cm-editor, .cm-content) from Ctrl+W / Cmd+W", () => {
+    render(
+      <div>
+        <TopNavigation projectId={"proj_123" as Id<"projects">} />
+        <div className="cm-editor">
+          <div className="cm-content" data-testid="cm-editor-surface">
+            editor code
+          </div>
+        </div>
+      </div>
+    );
+
+    const cmSurface = screen.getByTestId("cm-editor-surface");
+    fireEvent.keyDown(cmSurface, { key: "w", ctrlKey: true });
+    expect(mockCloseTab).not.toHaveBeenCalled();
+  });
+
+  // F. Preserving existing behavior
+  it("F1. double clicking a tab pins the file", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    fireEvent.doubleClick(tabs[1]);
+    expect(mockOpenFile).toHaveBeenCalledWith("file_2", { pinned: true });
+  });
+
+  it("F2. clicking a tab activates the file", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+    const tabs = screen.getAllByRole("tab");
+
+    fireEvent.click(tabs[2]);
+    expect(mockSetActiveTab).toHaveBeenCalledWith("file_3");
+  });
+});
+
+describe("Issue #45 — Code / Preview Tab Accessibility & Keyboard Navigation", () => {
+  it("C1. exposes role='tablist' with Code and Preview tabs", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+    const tablist = screen.getByRole("tablist", { name: "Project views" });
+    expect(tablist).toBeDefined();
+
+    const codeTab = screen.getByRole("tab", { name: "Code" });
+    const previewTab = screen.getByRole("tab", { name: "Preview" });
+
+    expect(codeTab).toBeDefined();
+    expect(previewTab).toBeDefined();
+    expect(codeTab.getAttribute("aria-selected")).toBe("true");
+    expect(codeTab.getAttribute("tabindex")).toBe("0");
+    expect(previewTab.getAttribute("aria-selected")).toBe("false");
+    expect(previewTab.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("C2. supports keyboard navigation between Code and Preview tabs", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+    const codeTab = screen.getByRole("tab", { name: "Code" });
+    const previewTab = screen.getByRole("tab", { name: "Preview" });
+
+    codeTab.focus();
+    expect(document.activeElement).toBe(codeTab);
+
+    // ArrowRight moves focus to Preview
+    fireEvent.keyDown(codeTab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(previewTab);
+
+    // ArrowRight on Preview wraps to Code
+    fireEvent.keyDown(previewTab, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(codeTab);
+
+    // ArrowLeft on Code wraps to Preview
+    fireEvent.keyDown(codeTab, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(previewTab);
+
+    // Home moves to Code, End moves to Preview
+    fireEvent.keyDown(previewTab, { key: "Home" });
+    expect(document.activeElement).toBe(codeTab);
+
+    fireEvent.keyDown(codeTab, { key: "End" });
+    expect(document.activeElement).toBe(previewTab);
+  });
+
+  it("C3. activates Preview view on Enter or Space or click", () => {
+    render(<ProjectIdView projectId={"proj_123" as Id<"projects">} />);
+    const codeTab = screen.getByRole("tab", { name: "Code" });
+    const previewTab = screen.getByRole("tab", { name: "Preview" });
+
+    // Activate Preview via Enter
+    fireEvent.keyDown(previewTab, { key: "Enter" });
+    expect(previewTab.getAttribute("aria-selected")).toBe("true");
+    expect(previewTab.getAttribute("tabindex")).toBe("0");
+    expect(codeTab.getAttribute("aria-selected")).toBe("false");
+    expect(codeTab.getAttribute("tabindex")).toBe("-1");
+
+    // Activate Code via Click
+    fireEvent.click(codeTab);
+    expect(codeTab.getAttribute("aria-selected")).toBe("true");
+    expect(codeTab.getAttribute("tabindex")).toBe("0");
+    expect(previewTab.getAttribute("aria-selected")).toBe("false");
   });
 });
