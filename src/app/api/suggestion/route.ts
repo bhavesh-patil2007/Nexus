@@ -4,7 +4,18 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
 
-const suggestionSchema = z.object({
+export const suggestionRequestSchema = z.object({
+  fileName: z.string().trim().min(1, "fileName is required").max(500, "fileName is too long"),
+  code: z.string().max(200_000, "code payload exceeds maximum size limit"),
+  currentLine: z.string().max(10_000, "currentLine is too long").optional(),
+  previousLines: z.string().max(50_000, "previousLines is too long").optional(),
+  textBeforeCursor: z.string().max(10_000, "textBeforeCursor is too long").optional(),
+  textAfterCursor: z.string().max(10_000, "textAfterCursor is too long").optional(),
+  nextLines: z.string().max(50_000, "nextLines is too long").optional(),
+  lineNumber: z.number().int("lineNumber must be an integer").nonnegative("lineNumber must be non-negative").max(1_000_000, "lineNumber is too large").optional(),
+});
+
+export const suggestionSchema = z.object({
   suggestion: z
     .string()
     .describe(
@@ -12,7 +23,7 @@ const suggestionSchema = z.object({
     ),
 });
 
-const SUGGESTION_PROMPT = `You are a code suggestion assistant.
+export const SUGGESTION_PROMPT = `You are a code suggestion assistant.
 
 <context>
 <file_name>{fileName}</file_name>
@@ -49,36 +60,47 @@ export async function POST(request: Request) {
     if (!userId) {
       return NextResponse.json(
         { error: "Unauthorized" },
-        { status: 403 },
+        { status: 401 }
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid request body" },
+        { status: 400 }
+      );
+    }
+
+    const parseResult = suggestionRequestSchema.safeParse(body);
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: "Invalid suggestion payload" },
+        { status: 400 }
       );
     }
 
     const {
       fileName,
       code,
-      currentLine,
-      previousLines,
-      textBeforeCursor,
-      textAfterCursor,
-      nextLines,
-      lineNumber,
-    } = await request.json();
-
-    if (!code) {
-      return NextResponse.json(
-        { error: "Code is required" },
-        { status: 400 }
-      );
-    }
+      currentLine = "",
+      previousLines = "",
+      textBeforeCursor = "",
+      textAfterCursor = "",
+      nextLines = "",
+      lineNumber = 1,
+    } = parseResult.data;
 
     const prompt = SUGGESTION_PROMPT
       .replace("{fileName}", fileName)
       .replace("{code}", code)
       .replace("{currentLine}", currentLine)
-      .replace("{previousLines}", previousLines || "")
+      .replace("{previousLines}", previousLines)
       .replace("{textBeforeCursor}", textBeforeCursor)
       .replace("{textAfterCursor}", textAfterCursor)
-      .replace("{nextLines}", nextLines || "")
+      .replace("{nextLines}", nextLines)
       .replace("{lineNumber}", lineNumber.toString());
 
     const { output } = await generateText({
@@ -87,12 +109,12 @@ export async function POST(request: Request) {
       prompt,
     });
 
-    return NextResponse.json({ suggestion: output.suggestion })
+    return NextResponse.json({ suggestion: output.suggestion });
   } catch (error) {
-    console.error("Suggestion error: ", error);
+    console.error("Suggestion error: ", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
       { error: "Failed to generate suggestion" },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
