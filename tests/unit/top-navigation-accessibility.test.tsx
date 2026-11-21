@@ -36,8 +36,10 @@ vi.mock("@/features/projects/hooks/use-files", () => ({
 
 // Mock useEditor hook
 const mockCloseTab = vi.fn();
+const mockCloseAllTabs = vi.fn();
 const mockSetActiveTab = vi.fn();
 const mockOpenFile = vi.fn();
+const mockHasDirtyTabs = vi.fn(() => false);
 
 let mockOpenTabs: string[] = ["file_1", "file_2"];
 let mockActiveTabId: string | null = "file_1";
@@ -50,7 +52,9 @@ vi.mock("@/features/editor/hooks/use-editor", () => ({
     setActiveTab: mockSetActiveTab,
     openFile: mockOpenFile,
     closeTab: mockCloseTab,
+    closeAllTabs: mockCloseAllTabs,
     isFileDirty: () => false,
+    hasDirtyTabs: mockHasDirtyTabs,
     getTabData: () => undefined,
   }),
 }));
@@ -663,5 +667,97 @@ describe("Issue #65 — Ctrl/Cmd+P File Quick-Open Dialog", () => {
     rerender(<ProjectIdView projectId={"proj_456" as Id<"projects">} />);
 
     expect(screen.queryByPlaceholderText("Search files by name or path...")).toBeNull();
+  });
+});
+
+describe("TopNavigation Close All Tabs Control (Issue #73)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOpenTabs = ["file_1", "file_2"];
+    mockActiveTabId = "file_1";
+    mockHasDirtyTabs.mockReturnValue(false);
+  });
+
+  it("renders 'Close all tabs' button when tabs are open", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    const closeAllButton = screen.getByRole("button", { name: "Close all tabs" });
+    expect(closeAllButton).toBeDefined();
+    expect(closeAllButton.getAttribute("aria-label")).toBe("Close all tabs");
+    expect(closeAllButton.getAttribute("title")).toBe("Close all tabs");
+  });
+
+  it("does not render 'Close all tabs' button when no tabs are open", () => {
+    mockOpenTabs = [];
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    expect(screen.queryByRole("button", { name: "Close all tabs" })).toBeNull();
+  });
+
+  it("preserves individual tab close buttons alongside Close All control", () => {
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    expect(screen.getByRole("button", { name: "Close App.tsx" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Close index.ts" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Close all tabs" })).toBeDefined();
+  });
+
+  it("closes all tabs immediately without dialog when hasDirtyTabs is false", () => {
+    mockHasDirtyTabs.mockReturnValue(false);
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    const closeAllButton = screen.getByRole("button", { name: "Close all tabs" });
+    fireEvent.click(closeAllButton);
+
+    expect(mockCloseAllTabs).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Close all tabs?")).toBeNull();
+  });
+
+  it("prompts with confirmation dialog and does not close tabs immediately when hasDirtyTabs is true", () => {
+    mockHasDirtyTabs.mockReturnValue(true);
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    const closeAllButton = screen.getByRole("button", { name: "Close all tabs" });
+    fireEvent.click(closeAllButton);
+
+    expect(mockCloseAllTabs).not.toHaveBeenCalled();
+    expect(screen.getByText("Close all tabs?")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Some tabs contain unsaved changes. Closing all tabs will discard those changes. This action cannot be undone."
+      )
+    ).toBeDefined();
+  });
+
+  it("preserves tabs and closes dialog when user cancels confirmation", async () => {
+    mockHasDirtyTabs.mockReturnValue(true);
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    const closeAllButton = screen.getByRole("button", { name: "Close all tabs" });
+    fireEvent.click(closeAllButton);
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButton);
+
+    expect(mockCloseAllTabs).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByText("Close all tabs?")).toBeNull();
+    });
+  });
+
+  it("closes all tabs after user confirms in the dialog", async () => {
+    mockHasDirtyTabs.mockReturnValue(true);
+    render(<TopNavigation projectId={"proj_123" as Id<"projects">} />);
+
+    const closeAllButton = screen.getByRole("button", { name: "Close all tabs" });
+    fireEvent.click(closeAllButton);
+
+    const confirmButton = screen.getByRole("button", { name: "Close All" });
+    fireEvent.click(confirmButton);
+
+    expect(mockCloseAllTabs).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.queryByText("Close all tabs?")).toBeNull();
+    });
   });
 });
