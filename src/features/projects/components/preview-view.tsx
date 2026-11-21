@@ -9,7 +9,10 @@ import {
   RefreshCwIcon,
   EraserIcon,
   CircleStopIcon,
+  CopyIcon,
+  ExternalLinkIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { useWebContainer } from "@/features/preview/hooks/use-webcontainer";
 import { PreviewSettingsPopover } from "@/features/preview/components/preview-settings-popover";
@@ -43,6 +46,20 @@ export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
 
   const isLoading = status === "booting" || status === "installing";
 
+  const handleCopyUrl = async () => {
+    if (!previewUrl) return;
+
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(previewUrl);
+      toast.success("Preview URL copied to clipboard");
+    } catch {
+      toast.error("Failed to copy preview URL");
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-background">
       <div className="h-8.75 flex items-center border-b bg-sidebar shrink-0">
@@ -57,15 +74,49 @@ export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
           <RefreshCwIcon className="size-3" />
         </Button>
 
-        <div className="flex-1 h-full flex items-center px-3 bg-background border-x text-xs text-muted-foreground truncate font-mono">
-          {isLoading && (
-            <div className="flex items-center gap-1.5">
-              <Loader2Icon className="size-3 animate-spin" />
-              {status === "booting" ? "Starting..." : "Installing..."}
+        <div className="flex-1 h-full flex items-center justify-between px-3 bg-background border-x text-xs text-muted-foreground min-w-0 font-mono">
+          <div className="truncate min-w-0 mr-2">
+            {isLoading && (
+              <div className="flex items-center gap-1.5">
+                <Loader2Icon className="size-3 animate-spin" />
+                {status === "booting" ? "Starting..." : "Installing..."}
+              </div>
+            )}
+            {previewUrl && <span className="truncate">{previewUrl}</span>}
+            {!isLoading && !previewUrl && !error && <span>Ready to preview</span>}
+          </div>
+
+          {previewUrl && (
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                title="Copy preview URL"
+                aria-label="Copy preview URL"
+                onClick={handleCopyUrl}
+              >
+                <CopyIcon className="size-3" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                title="Open preview URL"
+                aria-label="Open preview URL"
+                asChild
+              >
+                <a
+                  href={previewUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ExternalLinkIcon className="size-3" />
+                </a>
+              </Button>
             </div>
           )}
-          {previewUrl && <span className="truncate">{previewUrl}</span>}
-          {!isLoading && !previewUrl && !error && <span>Ready to preview</span>}
         </div>
 
         <Button
