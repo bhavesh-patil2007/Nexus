@@ -71,7 +71,7 @@ git commit -m "ci(quality): establish Vitest and GitHub Actions pipeline"
 
 1. **TypeScript First:** Ensure strict type safety. Avoid `any` types; define explicit interfaces and Zod schemas for boundary validation.
 2. **Component Architecture:** Use React 19 functional components with Tailwind CSS 4 and Radix UI / shadcn design tokens.
-3. **Database Mutations:** All Convex mutations touching user data must enforce user ownership authentication via Clerk session checks or internal keys.
+3. **Database Mutations & API Contracts:** All Convex mutations and Next.js API routes touching user data must enforce user ownership authentication via Clerk session checks or internal keys. Refer to the [API Route Reference](docs/architecture.md#7-api-route-reference) before adding or updating endpoints.
 4. **Focused Changes:** Keep PRs narrowly focused on a single issue or objective. Avoid drive-by formatting or sweeping architectural rewrites.
 5. **No Committed Secrets:** Never commit `.env`, `.env.local`, API keys, or private tokens.
 
