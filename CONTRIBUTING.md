@@ -79,23 +79,64 @@ git commit -m "ci(quality): establish Vitest and GitHub Actions pipeline"
 
 ## 🧪 Testing & Quality Requirements
 
-Before submitting a pull request, run all quality checks locally:
+Nexus uses a two-tiered testing architecture to validate application correctness. Contributors are expected to verify both suites before opening a pull request.
+
+### Prerequisites & Node.js Version
+Nexus requires **Node.js `v20.x` or higher** (verified on Node 20 LTS and Node 24). Standalone regression suites rely on Node's native test runner (`node:test`).
+
+### 1. Vitest Unit Tests
+Discovered through `vitest.config.ts` matching `tests/unit/**/*.test.{ts,tsx}`. These test isolated React components, accessibility attributes, DOM keyboard navigation, and synchronous helper functions in JSDOM / Node environments.
+```bash
+npm test
+```
+
+### 2. Standalone Node Regression Tests
+Located at the root of `tests/*.test.js` and executed via Node's built-in test runner:
+```bash
+npm run test:regression
+```
+This suite verifies complete subsystem contracts, including:
+- `tests/cancellation-authorization.test.js`: Message & project cancellation permission boundaries.
+- `tests/editor-dirty-tabs-conflict.test.js`: Editor tab dirty tracking, external conflict detection, and unsaved changes preservation.
+- `tests/execution-progress-tracking.test.js`: Inngest AI execution lifecycle and tool event streaming.
+- `tests/frontend-project-deletion.test.js`: Project deletion modal validation and contracts.
+- `tests/github-import-export-optimization.test.js`: Batch processing, exponential backoff, and GitHub sync resilience.
+- `tests/interactive-terminal.test.js`: WebContainer shell process spawning, SIGINT handling, and resizing.
+- `tests/tool-handlers-tracking.test.js`: AI tool execution wrapping and tracking.
+- `tests/tool-retry-idempotency.test.js`: Deterministic retry IDs and Inngest step idempotency.
+
+### 3. Special-Runtime Integration Tests
+Certain historical backend integration tests (such as `tests/project-deletion-cascade.test.js` and `tests/security-resource-ownership.test.js`) require specialized Convex backend mocks and can be executed individually when working on those specific subsystems:
+```bash
+node --test tests/project-deletion-cascade.test.js
+node --test tests/security-resource-ownership.test.js
+```
+
+### Recommended Local Verification Sequence
+Run all quality checks locally before submitting a pull request:
 
 ```bash
-# Run unit tests
+# 1. Run unit test suite
 npm test
 
-# Run TypeScript compilation and type verification
+# 2. Run standalone regression test suite
+npm run test:regression
+
+# Or run both suites together:
+npm run test:all
+
+# 3. Verify TypeScript type safety
 npm run typecheck
 
-# Run ESLint
+# 4. Verify ESLint rules
 npm run lint
 
-# Verify production build
+# 5. Verify Next.js production build
 npm run build
 ```
 
-Ensure all new functionality is accompanied by relevant unit or integration tests under `tests/`.
+> [!TIP]
+> All test commands are designed to be cross-platform and work seamlessly in Windows PowerShell, Windows Command Prompt, macOS, and Linux without requiring shell-specific globs. For detailed inventory of test files, see [tests/README.md](tests/README.md).
 
 ---
 

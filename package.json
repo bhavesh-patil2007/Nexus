@@ -9,6 +9,8 @@
     "lint": "eslint",
     "lint:changed": "node scripts/lint-changed.mjs",
     "test": "vitest run",
+    "test:regression": "node --test tests/cancellation-authorization.test.js tests/editor-dirty-tabs-conflict.test.js tests/execution-progress-tracking.test.js tests/frontend-project-deletion.test.js tests/github-import-export-optimization.test.js tests/interactive-terminal.test.js tests/tool-handlers-tracking.test.js tests/tool-retry-idempotency.test.js",
+    "test:all": "npm run test && npm run test:regression",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
