@@ -12,6 +12,7 @@ import {
   useFolderContents,
   useRenameFile,
   useDeleteFile,
+  useFilePath,
 } from "@/features/projects/hooks/use-files";
 import { useEditor } from "@/features/editor/hooks/use-editor";
 
@@ -45,6 +46,7 @@ export const Tree = ({
   });
   const createFile = useCreateFile();
   const createFolder = useCreateFolder();
+  const filePathData = useFilePath(item._id);
 
   const { openFile, closeTab, activeTabId } = useEditor(projectId);
 
@@ -53,6 +55,35 @@ export const Tree = ({
     parentId: item._id,
     enabled: item.type === "folder" && isOpen,
   });
+
+  const handleCopyPath = async () => {
+    if (filePathData === undefined) {
+      toast.error("Path is still loading");
+      return;
+    }
+
+    if (!filePathData || filePathData.length === 0) {
+      toast.error("Unable to resolve path");
+      return;
+    }
+
+    const relativePath = filePathData.map((segment) => segment.name).join("/");
+
+    if (!relativePath) {
+      toast.error("Unable to resolve path");
+      return;
+    }
+
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(relativePath);
+      toast.success("Path copied to clipboard");
+    } catch {
+      toast.error("Failed to copy path to clipboard");
+    }
+  };
 
   const handleRename = async (newName: string) => {
     setIsRenaming(false);
@@ -95,7 +126,7 @@ export const Tree = ({
     }
   };
 
-  const startCreating =(type: "file" | "folder") => {
+  const startCreating = (type: "file" | "folder") => {
     setIsOpen(true);
     setCreating(type);
   };
@@ -126,13 +157,14 @@ export const Tree = ({
         onRename={() => setIsRenaming(true)}
         onDelete={() => {
           closeTab(item._id);
-          deleteFile({ id: item._id })
+          deleteFile({ id: item._id });
         }}
+        onCopyPath={handleCopyPath}
       >
         <FileIcon fileName={fileName} autoAssign className="size-4" />
         <span className="truncate text-sm">{fileName}</span>
       </TreeItemWrapper>
-    )
+    );
   }
 
   const folderName = item.name;
@@ -150,7 +182,7 @@ export const Tree = ({
       </div>
       <span className="truncate text-sm">{folderName}</span>
     </>
-  )
+  );
 
   if (creating) {
     return (
@@ -182,7 +214,7 @@ export const Tree = ({
           </>
         )}
       </>
-    )
+    );
   }
 
   if (isRenaming) {
@@ -210,7 +242,7 @@ export const Tree = ({
           </>
         )}
       </>
-    )
+    );
   }
 
   return (
@@ -221,8 +253,9 @@ export const Tree = ({
         onClick={() => setIsOpen((value) => !value)}
         onRename={() => setIsRenaming(true)}
         onDelete={() => {
-          deleteFile({ id: item._id })
+          deleteFile({ id: item._id });
         }}
+        onCopyPath={handleCopyPath}
         onCreateFile={() => startCreating("file")}
         onCreateFolder={() => startCreating("folder")}
       >

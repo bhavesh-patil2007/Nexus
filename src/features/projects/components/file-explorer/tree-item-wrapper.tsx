@@ -1,3 +1,5 @@
+import { CopyIcon } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -20,6 +22,7 @@ export const TreeItemWrapper = ({
   onDoubleClick,
   onRename,
   onDelete,
+  onCopyPath,
   onCreateFile,
   onCreateFolder,
 }: {
@@ -31,6 +34,7 @@ export const TreeItemWrapper = ({
   onDoubleClick?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
+  onCopyPath?: () => void;
   onCreateFile?: () => void;
   onCreateFolder?: () => void;
 }) => {
@@ -70,7 +74,16 @@ export const TreeItemWrapper = ({
             <ContextMenuSeparator />
           </>
         )}
-         <ContextMenuItem 
+        <ContextMenuItem
+          onClick={onCopyPath}
+          className="text-sm"
+          aria-label="Copy Path"
+        >
+          <CopyIcon className="size-4 mr-2" />
+          Copy Path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
           onClick={onRename}
           className="text-sm"
         >
@@ -79,7 +92,7 @@ export const TreeItemWrapper = ({
             Enter
           </ContextMenuShortcut>
         </ContextMenuItem>
-         <ContextMenuItem 
+        <ContextMenuItem
           onClick={onDelete}
           className="text-sm"
         >
