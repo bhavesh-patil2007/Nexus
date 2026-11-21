@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Allotment } from "allotment";
 import {
   Loader2Icon,
   TerminalSquareIcon,
   AlertTriangleIcon,
   RefreshCwIcon,
+  EraserIcon,
 } from "lucide-react";
 
 import { useWebContainer } from "@/features/preview/hooks/use-webcontainer";
@@ -22,6 +23,7 @@ import { Id } from "../../../../convex/_generated/dataModel";
 export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
   const project = useProject(projectId);
   const [showTerminal, setShowTerminal] = useState(true);
+  const clearTerminalRef = useRef<(() => void) | null>(null);
 
   const {
     status,
@@ -117,14 +119,27 @@ export const PreviewView = ({ projectId }: { projectId: Id<"projects"> }) => {
           {showTerminal && (
             <Allotment.Pane minSize={100} maxSize={500} preferredSize={200}>
               <div className="h-full flex flex-col bg-background border-t">
-                <div className="h-7 flex items-center px-3 text-xs gap-1.5 text-muted-foreground border-b border-border/50 shrink-0">
-                  <TerminalSquareIcon className="size-3" />
-                  Terminal
+                <div className="h-7 flex items-center justify-between px-3 text-xs text-muted-foreground border-b border-border/50 shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <TerminalSquareIcon className="size-3" />
+                    Terminal
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    title="Clear terminal"
+                    aria-label="Clear terminal"
+                    onClick={() => clearTerminalRef.current?.()}
+                  >
+                    <EraserIcon className="size-3" />
+                  </Button>
                 </div>
                 <PreviewTerminal
                   output={terminalOutput}
                   onData={sendTerminalInput}
                   onResize={resizeTerminal}
+                  onClearRef={clearTerminalRef}
                 />
               </div>
             </Allotment.Pane>
